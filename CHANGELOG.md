@@ -1,3 +1,13 @@
+## [2.3.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.2.0...v2.3.0) (2026-11-02)
+
+### 🐛 Bug Fixes
+
+* **YouTube - Bespoke feed:** Use ThemeUtils for the app colors ([965de1c](https://github.com/kcabouda/morphe-HackerTube/commit/965de1c04df47dbe18fef19891bb45a5ab8d5283))
+
+### ✨ New Features
+
+* **YouTube - Bespoke feed:** Add the HackerTube feed screen ([cd6bb8c](https://github.com/kcabouda/morphe-HackerTube/commit/cd6bb8c80fc510eb19adbec2ba61cbdf04003628))
+
 ## [2.2.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.1.1...v2.2.0) (2026-11-02)
 
 ### ✨ New Features
