@@ -1,3 +1,9 @@
+## [2.1.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.0.0...v2.1.0) (2026-11-02)
+
+### ✨ New Features
+
+* **YouTube - Bespoke feed:** Add Bespoke feed entry in the Feed settings screen ([dd72c62](https://github.com/kcabouda/morphe-HackerTube/commit/dd72c62462087d7c1f1d300feeecba8ab62e6d97))
+
 ## [2.0.0](https://github.com/MorpheApp/morphe-patches/compare/v1.48.0...v2.0.0) (2026-10-30)
 
 ### ⚠ BREAKING CHANGES
