@@ -1,3 +1,9 @@
+## [2.5.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.4.1...v2.5.0) (2026-11-02)
+
+### ✨ New Features
+
+* **YouTube - Bespoke feed:** Show the feed inside the main screen ([fe9bd2a](https://github.com/kcabouda/morphe-HackerTube/commit/fe9bd2a5157b612909cb50a0732a5f8460e10ae8))
+
 ## [2.4.1](https://github.com/kcabouda/morphe-HackerTube/compare/v2.4.0...v2.4.1) (2026-11-02)
 
 ### 🐛 Bug Fixes
