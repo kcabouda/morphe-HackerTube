@@ -116,7 +116,10 @@ val cloneAppPatch = resourcePatch(
     packageNameOption = stringOption(
         key = "packageName",
         default = "Default",
-        values = mapOf("Default" to "Default"),
+        values = mapOf(
+            "Default" to "Default",
+            "HTKarpathyLeGoat YouTube" to "app.morphe.android.youtube.htk",
+        ),
         title = "Package name",
         description = "Package name to use for the cloned app.",
         required = true,
