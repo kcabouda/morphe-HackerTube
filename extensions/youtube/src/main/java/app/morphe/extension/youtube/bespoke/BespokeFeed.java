@@ -2,6 +2,14 @@ package app.morphe.extension.youtube.bespoke;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.ColorFilter;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
+import android.graphics.RectF;
+import android.graphics.drawable.Drawable;
+import android.view.MotionEvent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -49,6 +57,7 @@ import app.morphe.extension.shared.ResourceType;
 import app.morphe.extension.shared.ResourceUtils;
 import app.morphe.extension.shared.Utils;
 import app.morphe.extension.shared.theme.ThemeUtils;
+import app.morphe.extension.youtube.shared.NavigationBar;
 
 /**
  * HackerTube-style feed of videos recommended on Hacker News.
@@ -109,6 +118,110 @@ public final class BespokeFeed {
         Intent intent = activity.getIntent();
         return intent != null && BESPOKE_FEED_INTENT.equals(intent.getDataString());
     }
+
+    // region Navigation bar
+
+    /**
+     * Injection point (navigation tab created).
+     * Turns the Shorts tab into a HackerTube tab that opens the feed.
+     */
+    public static void navigationTabCreated(NavigationBar.NavigationButton button, View tabView) {
+        if (button != NavigationBar.NavigationButton.SHORTS) return;
+        try {
+            TextView label = null;
+            try {
+                label = Utils.getChildViewByResourceName(tabView, "text");
+                label.setText("HackerTube");
+            } catch (Exception ex) {
+                Logger.printDebug(() -> "Bespoke feed: Shorts tab has no label");
+            }
+            try {
+                ImageView icon = Utils.getChildViewByResourceName(tabView, "image");
+                icon.setImageTintList(null);
+                icon.setImageDrawable(new HackerNewsIcon(tabView.getContext()));
+            } catch (Exception ex) {
+                Logger.printDebug(() -> "Bespoke feed: Shorts tab has no icon");
+            }
+            if (label != null) {
+                label.setContentDescription("HackerTube");
+            }
+
+            // Consume the touches so the Shorts tab is never selected, and open the feed instead.
+            tabView.setOnTouchListener((v, event) -> {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        v.setPressed(true);
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                        v.setPressed(false);
+                        if (event.getX() >= 0 && event.getX() <= v.getWidth()
+                                && event.getY() >= 0 && event.getY() <= v.getHeight()) {
+                            openFeed(v.getContext());
+                        }
+                        return true;
+                    case MotionEvent.ACTION_CANCEL:
+                        v.setPressed(false);
+                        return true;
+                    default:
+                        return true;
+                }
+            });
+        } catch (Exception ex) {
+            Logger.printException(() -> "Bespoke feed navigationTabCreated failure", ex);
+        }
+    }
+
+    public static void openFeed(Context context) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(BESPOKE_FEED_INTENT));
+            intent.setClassName(context.getPackageName(),
+                    "com.google.android.gms.common.api.GoogleApiActivity");
+            if (!(context instanceof Activity)) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+        } catch (Exception ex) {
+            Logger.printException(() -> "Bespoke feed could not be opened", ex);
+        }
+    }
+
+    /**
+     * Hacker News style icon: orange rounded square with a white Y.
+     */
+    private static final class HackerNewsIcon extends Drawable {
+        private final Paint box = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint letter = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int size;
+        private final RectF rect = new RectF();
+
+        HackerNewsIcon(Context context) {
+            size = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 24,
+                    context.getResources().getDisplayMetrics());
+            box.setColor(Color.parseColor("#FF6600"));
+            letter.setColor(Color.WHITE);
+            letter.setTypeface(Typeface.DEFAULT_BOLD);
+            letter.setTextAlign(Paint.Align.CENTER);
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            float w = getBounds().width(), h = getBounds().height();
+            float side = Math.min(w, h) * 0.86f;
+            float left = getBounds().left + (w - side) / 2f;
+            float top = getBounds().top + (h - side) / 2f;
+            rect.set(left, top, left + side, top + side);
+            canvas.drawRoundRect(rect, side * 0.18f, side * 0.18f, box);
+            letter.setTextSize(side * 0.78f);
+            float baseline = rect.centerY() - (letter.descent() + letter.ascent()) / 2f;
+            canvas.drawText("Y", rect.centerX(), baseline, letter);
+        }
+
+        @Override public int getIntrinsicWidth() { return size; }
+        @Override public int getIntrinsicHeight() { return size; }
+        @Override public void setAlpha(int alpha) { box.setAlpha(alpha); letter.setAlpha(alpha); }
+        @Override public void setColorFilter(ColorFilter colorFilter) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    // endregion
 
     // region Data
 
