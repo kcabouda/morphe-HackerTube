@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-02T22:32:30",
-  "description": "## [2.1.1](https://github.com/kcabouda/morphe-HackerTube/compare/v2.1.0...v2.1.1) (2026-11-02)\n\n### 🐛 Bug Fixes\n\n* Rename the patch bundle to HTKarpathyLeGoat ([72d83d2](https://github.com/kcabouda/morphe-HackerTube/commit/72d83d28f91f185731d2ed944497510c461be1d0))",
-  "download_url": "https://github.com/kcabouda/morphe-HackerTube/releases/download/v2.1.1/patches-2.1.1.mpp",
+  "created_at": "2026-11-02T22:46:29",
+  "description": "## [2.2.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.1.1...v2.2.0) (2026-11-02)\n\n### ✨ New Features\n\n* **Clone app:** Add a preset package name for a second YouTube install ([b0b8233](https://github.com/kcabouda/morphe-HackerTube/commit/b0b8233cca7adf1404dc1bf2611cd67b91a2e297))",
+  "download_url": "https://github.com/kcabouda/morphe-HackerTube/releases/download/v2.2.0/patches-2.2.0.mpp",
   "signature_download_url": "",
-  "version": "2.1.1"
+  "version": "2.2.0"
 }

@@ -1,3 +1,9 @@
+## [2.2.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.1.1...v2.2.0) (2026-11-02)
+
+### ✨ New Features
+
+* **Clone app:** Add a preset package name for a second YouTube install ([b0b8233](https://github.com/kcabouda/morphe-HackerTube/commit/b0b8233cca7adf1404dc1bf2611cd67b91a2e297))
+
 ## [2.1.1](https://github.com/kcabouda/morphe-HackerTube/compare/v2.1.0...v2.1.1) (2026-11-02)
 
 ### 🐛 Bug Fixes
