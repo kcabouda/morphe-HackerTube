@@ -6,6 +6,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Release
@@ -19,6 +23,15 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Seed baseline tag
+        # The fork has no tags. Mark the upstream v2.0.0 commit we forked from,
+        # so the first release only lists our own changes.
+        run: |
+          if [ -z "$(git tag -l 'v*')" ]; then
+            git tag v2.0.0 0bb704a9a4edb5324f6e607f3fc5a531713c607c
+            git push origin v2.0.0
+          fi
 
       - name: Setup Java
         uses: actions/setup-java@v6
