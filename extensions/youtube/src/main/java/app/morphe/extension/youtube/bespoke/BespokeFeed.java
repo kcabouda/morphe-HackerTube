@@ -107,7 +107,7 @@ public final class BespokeFeed {
     public static boolean showIfRequested(Activity activity) {
         try {
             if (!isFeedActivity(activity)) return false;
-            new Screen(activity).show();
+            new Screen(activity, false).show();
             return true;
         } catch (Exception ex) {
             Logger.printException(() -> "Bespoke feed failed to open", ex);
@@ -206,7 +206,79 @@ public final class BespokeFeed {
         if (tab != null) tab.setPressed(pressed);
     }
 
+    /** Browse fragments that show the feed instead of their page. */
+    private static final java.util.Map<Object, Boolean> feedFragments =
+            Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private static WeakReference<Screen> currentEmbedded = new WeakReference<>(null);
+    /** The feed was requested, and the next History page opened shows it. */
+    private static long feedRequestedUntil;
+
+    /**
+     * Injection point (browse fragment onCreateView, after the page view is created).
+     *
+     * @return the feed view if this fragment was opened by the HackerTube tab, otherwise the page view.
+     */
+    public static View wrapBrowseView(Object fragment, View view, String browseId) {
+        try {
+            boolean requested = "FEhistory".equals(browseId)
+                    && android.os.SystemClock.uptimeMillis() < feedRequestedUntil;
+            if (!requested && !feedFragments.containsKey(fragment)) return view;
+            feedRequestedUntil = 0;
+            feedFragments.put(fragment, Boolean.TRUE);
+
+            Activity activity = findActivity(view.getContext());
+            if (activity == null) return view;
+            Screen screen = new Screen(activity, true);
+            View feed = screen.build();
+            currentEmbedded = new WeakReference<>(screen);
+            return feed;
+        } catch (Exception ex) {
+            Logger.printException(() -> "Bespoke feed wrapBrowseView failure", ex);
+            return view;
+        }
+    }
+
+    private static Activity findActivity(Context context) {
+        while (context instanceof android.content.ContextWrapper) {
+            if (context instanceof Activity) return (Activity) context;
+            Context base = ((android.content.ContextWrapper) context).getBaseContext();
+            if (base == context) break;
+            context = base;
+        }
+        return null;
+    }
+
+    /**
+     * Opens the feed as a page of the main screen, so the miniplayer stays on top of it.
+     * The History page is used as the host page (its content is replaced by the feed).
+     */
     public static void openFeed(Context context) {
+        try {
+            // Tapping the tab again while the feed is shown scrolls it to the top.
+            Screen shown = currentEmbedded.get();
+            if (shown != null && shown.list != null && shown.list.isShown()) {
+                shown.list.smoothScrollToPosition(0);
+                return;
+            }
+            feedRequestedUntil = android.os.SystemClock.uptimeMillis() + 15_000;
+            // YouTube deduplicates repeated identical intents, a unique fragment avoids that.
+            Uri destination = Uri.parse("https://www.youtube.com/feed/history").buildUpon()
+                    .fragment("hackertube-" + java.util.UUID.randomUUID())
+                    .build();
+            context.startActivity(new Intent(Intent.ACTION_VIEW, destination)
+                    .setPackage(context.getPackageName())
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception ex) {
+            feedRequestedUntil = 0;
+            Logger.printException(() -> "Bespoke feed could not be opened", ex);
+            openFeedScreen(context);
+        }
+    }
+
+    /**
+     * Opens the feed as a separate screen (used from the settings, and as a fallback).
+     */
+    public static void openFeedScreen(Context context) {
         try {
             Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(BESPOKE_FEED_INTENT));
             intent.setClassName(context.getPackageName(),
@@ -386,8 +458,11 @@ public final class BespokeFeed {
         ListView list;
         FeedAdapter adapter;
 
-        Screen(Activity activity) {
+        final boolean embedded;
+
+        Screen(Activity activity, boolean embedded) {
             this.activity = activity;
+            this.embedded = embedded;
             fg = ThemeUtils.getAppForegroundColor();
             bg = ThemeUtils.getAppBackgroundColor();
             fgSecondary = (fg & 0x00FFFFFF) | 0x99000000;
@@ -417,10 +492,15 @@ public final class BespokeFeed {
                 Logger.printInfo(() -> "Bespoke feed could not set theme", ex);
             }
 
+            activity.setContentView(build());
+        }
+
+        View build() {
             LinearLayout root = new LinearLayout(activity);
             root.setOrientation(LinearLayout.VERTICAL);
             root.setBackgroundColor(bg);
-            root.setFitsSystemWindows(true);
+            if (!embedded) root.setFitsSystemWindows(true);
+            root.setClickable(true); // Do not let touches fall through to a page below.
 
             // Header.
             LinearLayout header = new LinearLayout(activity);
@@ -431,7 +511,10 @@ public final class BespokeFeed {
             TextView back = text(22, fg, false);
             back.setText("←");
             back.setPadding(dp(12), dp(4), dp(12), dp(4));
-            back.setOnClickListener(v -> activity.finish());
+            back.setOnClickListener(v -> {
+                if (embedded) activity.onBackPressed();
+                else activity.finish();
+            });
             header.addView(back);
 
             LinearLayout titles = new LinearLayout(activity);
@@ -503,7 +586,7 @@ public final class BespokeFeed {
             root.addView(list, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-            activity.setContentView(root);
+            if (embedded) keepAboveNavigationBar(root);
 
             Utils.runOnBackgroundThread(() -> {
                 try {
@@ -515,10 +598,40 @@ public final class BespokeFeed {
                             "Could not load the catalog. Check your connection and open the feed again."));
                 }
             });
+            return root;
+        }
+
+        /**
+         * The browse page extends behind the navigation bar.
+         * Pad the list so its end is not hidden below the bar.
+         */
+        @SuppressWarnings("deprecation")
+        void keepAboveNavigationBar(View root) {
+            list.setClipToPadding(false);
+            root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+                try {
+                    int[] position = new int[2];
+                    v.getLocationOnScreen(position);
+                    int bottom = position[1] + v.getHeight();
+                    int availableBottom = bottom;
+                    int id = ResourceUtils.getIdIdentifier("bottom_bar_container");
+                    View navigation = id == 0 ? null : activity.findViewById(id);
+                    if (navigation != null && navigation.isShown()) {
+                        navigation.getLocationOnScreen(position);
+                        availableBottom = Math.min(availableBottom, position[1]);
+                    }
+                    int covered = Math.max(0, bottom - availableBottom);
+                    if (list.getPaddingBottom() != covered) {
+                        list.setPadding(0, 0, 0, covered);
+                    }
+                } catch (Exception ex) {
+                    Logger.printDebug(() -> "Bespoke feed layout update failed");
+                }
+            });
         }
 
         void onCatalog(Catalog c) {
-            if (activity.isFinishing()) return;
+            if (activity.isFinishing() || chipRow.getChildCount() > 0) return;
             addChip(CHIP_ALL, "Top");
             addChip(CHIP_SHUFFLE, "Shuffle");
             for (String[] area : c.areas) addChip(area[0], area[1]);

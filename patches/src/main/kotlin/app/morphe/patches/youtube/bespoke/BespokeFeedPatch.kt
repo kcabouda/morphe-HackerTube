@@ -1,6 +1,23 @@
 package app.morphe.patches.youtube.bespoke
 
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
 import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
+import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
+import app.morphe.patcher.fieldAccess
+import app.morphe.patcher.methodCall
+import app.morphe.patcher.patch.PatchException
+import app.morphe.patcher.util.getReference
+import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod.Companion.toMutable
+import app.morphe.patcher.util.registersUsed
+import app.morphe.patches.youtube.video.series.BrowseFragmentFingerprint
+import app.morphe.patches.youtube.video.series.BrowseRouteFingerprint
+import app.morphe.util.indexOfFirstInstructionReversedOrThrow
+import com.android.tools.smali.dexlib2.AccessFlags
+import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.reference.FieldReference
+import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
+import com.android.tools.smali.dexlib2.immutable.ImmutableMethodParameter
 import app.morphe.patcher.patch.bytecodePatch
 import app.morphe.patcher.util.cloneParameters
 import app.morphe.patcher.util.numberOfParameterRegisters
@@ -51,6 +68,71 @@ val bespokeFeedPatch = bytecodePatch(
         )
 
         hookNavigationButtonCreated(EXTENSION_CLASS)
+
+
+        // Show the feed inside YouTube's main screen, as a browse page, so the player and
+        // miniplayer work like on any other tab. The HackerTube tab opens a page whose
+        // browse fragment view is replaced by the feed (see BespokeFeed.wrapBrowseView).
+        BrowseFragmentFingerprint.let { browse ->
+            val fragment = browse.classDef
+            val create = browse.method
+            val diagnostic = browse.instructionMatches.single().index
+            val endpointIndex = create.indexOfFirstInstructionReversedOrThrow(
+                diagnostic,
+                fieldAccess(definingClass = "this", type = "L"),
+            )
+            val endpointField = create.getInstruction(endpointIndex).getReference<FieldReference>()!!
+            val routeMethod = BrowseRouteFingerprint(endpointField.type).matchAll()
+                .map { it.instructionMatches.first().getMethodCalled() }
+                .distinctBy { it.toString() }
+                .single()
+
+            fragment.methods.add(
+                ImmutableMethod(
+                    fragment.type,
+                    "patch_bespokeFeedView",
+                    listOf(ImmutableMethodParameter("Landroid/view/View;", null, null)),
+                    "Landroid/view/View;",
+                    AccessFlags.PUBLIC.value,
+                    null,
+                    null,
+                    MutableMethodImplementation(3),
+                ).toMutable().apply {
+                    addInstructions(
+                        0,
+                        """
+                            iget-object v0, p0, $endpointField
+                            invoke-static { v0 }, $routeMethod
+                            move-result-object v0
+                            invoke-static { p0, p1, v0 }, $EXTENSION_CLASS->wrapBrowseView(Ljava/lang/Object;Landroid/view/View;Ljava/lang/String;)Landroid/view/View;
+                            move-result-object v0
+                            return-object v0
+                        """
+                    )
+                }
+            )
+
+            // The page view (with its toolbar) is the result of the last View -> View call.
+            val contentIndex = create.indexOfFirstInstructionReversedOrThrow(
+                methodCall(
+                    parameters = listOf("Landroid/view/View;"),
+                    returnType = "Landroid/view/View;",
+                )
+            )
+            val instance = create.getInstruction(contentIndex).registersUsed.first()
+            val view = create.getInstruction<OneRegisterInstruction>(contentIndex + 1).registerA
+            if (view == instance) {
+                throw PatchException("Bespoke feed page wrapper overwrites the fragment register")
+            }
+
+            create.addInstructions(
+                contentIndex + 2,
+                """
+                    invoke-virtual { v$instance, v$view }, ${fragment.type}->patch_bespokeFeedView(Landroid/view/View;)Landroid/view/View;
+                    move-result-object v$view
+                """
+            )
+        }
 
         // Taps on the HackerTube (Shorts) tab are consumed by the navigation bar
         // before YouTube sees them, and open the feed instead.
