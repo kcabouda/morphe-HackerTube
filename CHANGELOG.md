@@ -1,3 +1,9 @@
+## [2.1.1](https://github.com/kcabouda/morphe-HackerTube/compare/v2.1.0...v2.1.1) (2026-11-02)
+
+### 🐛 Bug Fixes
+
+* Rename the patch bundle to HTKarpathyLeGoat ([72d83d2](https://github.com/kcabouda/morphe-HackerTube/commit/72d83d28f91f185731d2ed944497510c461be1d0))
+
 ## [2.1.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.0.0...v2.1.0) (2026-11-02)
 
 ### ✨ New Features

@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-02T21:33:48",
-  "description": "## [2.1.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.0.0...v2.1.0) (2026-11-02)\n\n### ✨ New Features\n\n* **YouTube - Bespoke feed:** Add Bespoke feed entry in the Feed settings screen ([dd72c62](https://github.com/kcabouda/morphe-HackerTube/commit/dd72c62462087d7c1f1d300feeecba8ab62e6d97))",
-  "download_url": "https://github.com/kcabouda/morphe-HackerTube/releases/download/v2.1.0/patches-2.1.0.mpp",
+  "created_at": "2026-11-02T22:32:30",
+  "description": "## [2.1.1](https://github.com/kcabouda/morphe-HackerTube/compare/v2.1.0...v2.1.1) (2026-11-02)\n\n### 🐛 Bug Fixes\n\n* Rename the patch bundle to HTKarpathyLeGoat ([72d83d2](https://github.com/kcabouda/morphe-HackerTube/commit/72d83d28f91f185731d2ed944497510c461be1d0))",
+  "download_url": "https://github.com/kcabouda/morphe-HackerTube/releases/download/v2.1.1/patches-2.1.1.mpp",
   "signature_download_url": "",
-  "version": "2.1.0"
+  "version": "2.1.1"
 }
