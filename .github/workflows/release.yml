@@ -25,11 +25,12 @@ jobs:
           fetch-depth: 0
 
       - name: Seed baseline tag
-        # The fork has no tags. Mark the upstream v2.0.0 commit we forked from,
-        # so the first release only lists our own changes.
+        # The fork has no tags. Mark the current commit as v2.0.0 (the upstream
+        # version we forked from) so releases only list our own changes.
+        # Tagging the upstream commit itself is refused: its workflow files differ.
         run: |
           if [ -z "$(git tag -l 'v*')" ]; then
-            out=$(git tag v2.0.0 0bb704a9a4edb5324f6e607f3fc5a531713c607c 2>&1 && git push origin v2.0.0 2>&1) \
+            out=$(git tag v2.0.0 HEAD 2>&1 && git push origin v2.0.0 2>&1) \
               || { echo "::error title=Seed baseline tag::$(echo "$out" | tr '\n' ' ')"; exit 1; }
           fi
 
