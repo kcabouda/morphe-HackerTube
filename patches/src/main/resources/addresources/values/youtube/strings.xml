@@ -1837,6 +1837,6 @@ Automatic recording is optional. It stops in incognito or when the account chang
     <string name="morphe_niconico_comments_max_length_no_limit">No limit</string>
 
     <!-- bespoke.bespokeFeedPatch -->
-    <string name="bespoke_feed_status_title">Bespoke feed</string>
-    <string name="bespoke_feed_status_summary">Installed. The feed itself is coming soon</string>
+    <string name="bespoke_feed_open_title">HackerTube feed</string>
+    <string name="bespoke_feed_open_summary">Videos Hacker News keeps recommending</string>
 </resources>

@@ -26,6 +26,7 @@ import app.morphe.extension.shared.settings.BaseActivityHook;
 import app.morphe.extension.shared.settings.SharedYouTubeSettings;
 import app.morphe.extension.shared.settings.preference.AbstractPreferenceFragment;
 import app.morphe.extension.shared.spoof.SpoofAppVersionPatch;
+import app.morphe.extension.youtube.bespoke.BespokeFeed;
 import app.morphe.extension.youtube.patches.VersionCheckPatch;
 import app.morphe.extension.youtube.settings.preference.YouTubePreferenceFragment;
 import app.morphe.extension.youtube.settings.search.YouTubeSearchViewController;
@@ -59,6 +60,7 @@ public class YouTubeActivityHook extends BaseActivityHook {
      */
     @SuppressWarnings("unused")
     public static void initialize(Activity parentActivity) {
+        if (BespokeFeed.showIfRequested(parentActivity)) return;
         BaseActivityHook.initialize(new YouTubeActivityHook(), parentActivity);
     }
 
@@ -184,6 +186,7 @@ public class YouTubeActivityHook extends BaseActivityHook {
      */
     @SuppressWarnings("unused")
     public static boolean handleBackPress(Activity activity) {
+        if (BespokeFeed.isFeedActivity(activity)) return false;
         if (searchViewController != null && searchViewController.isSearchActive()) {
             return searchViewController.handleBackPress();
         }

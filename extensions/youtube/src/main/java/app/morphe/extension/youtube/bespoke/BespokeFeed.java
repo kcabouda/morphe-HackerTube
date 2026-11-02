@@ -1,0 +1,543 @@
+package app.morphe.extension.youtube.bespoke;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.TextUtils;
+import android.text.TextWatcher;
+import android.util.LruCache;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AbsListView;
+import android.widget.BaseAdapter;
+import android.widget.EditText;
+import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ListView;
+import android.widget.TextView;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import app.morphe.extension.shared.Logger;
+import app.morphe.extension.shared.ResourceType;
+import app.morphe.extension.shared.ResourceUtils;
+import app.morphe.extension.shared.Utils;
+
+/**
+ * HackerTube-style feed of videos recommended on Hacker News.
+ * <p>
+ * Hosted by the same activity as the Morphe settings: YouTubeActivityHook.initialize
+ * hands over to {@link #showIfRequested(Activity)} when the intent data is
+ * {@link #BESPOKE_FEED_INTENT}. The UI is built in code so no resources are needed.
+ * <p>
+ * Catalog: bespoke/catalog.json in the patches repo, built from the HackerTube data
+ * export (hackertube.org/data, ODC-By 1.0). Downloaded once, cached, refreshed weekly.
+ */
+@SuppressWarnings("unused")
+public final class BespokeFeed {
+
+    public static final String BESPOKE_FEED_INTENT = "bespoke_feed_intent";
+
+    private static final String CATALOG_URL =
+            "https://raw.githubusercontent.com/kcabouda/morphe-HackerTube/main/bespoke/catalog.json";
+    private static final long CATALOG_MAX_AGE_MILLIS = 7L * 24 * 60 * 60 * 1000;
+    private static final String ATTRIBUTION =
+            "Data: HackerTube (hackertube.org) · Hacker News via open-index/hacker-news · ODC-By 1.0";
+
+    private static final String CHIP_ALL = "__all";
+    private static final String CHIP_SHUFFLE = "__shuffle";
+
+    private static final ExecutorService IMAGE_EXECUTOR = Executors.newFixedThreadPool(4);
+    private static final LruCache<String, Bitmap> THUMBNAILS =
+            new LruCache<String, Bitmap>((int) (Runtime.getRuntime().maxMemory() / 8)) {
+                @Override
+                protected int sizeOf(String key, Bitmap value) {
+                    return value.getByteCount();
+                }
+            };
+
+    /** Parsed catalog, kept for the life of the process. */
+    private static volatile Catalog catalog;
+
+    private BespokeFeed() {
+    }
+
+    /**
+     * Injection point (called from YouTubeActivityHook.initialize).
+     *
+     * @return true if the activity was opened for the feed and is now showing it.
+     */
+    public static boolean showIfRequested(Activity activity) {
+        try {
+            if (!isFeedActivity(activity)) return false;
+            new Screen(activity).show();
+            return true;
+        } catch (Exception ex) {
+            Logger.printException(() -> "Bespoke feed failed to open", ex);
+            return false;
+        }
+    }
+
+    public static boolean isFeedActivity(Activity activity) {
+        Intent intent = activity.getIntent();
+        return intent != null && BESPOKE_FEED_INTENT.equals(intent.getDataString());
+    }
+
+    // region Data
+
+    private static final class Video {
+        final String id, title, channel, area, category, why;
+        final double score;
+        final int recommenders;
+        final int firstYear;
+        final String searchText;
+
+        Video(JSONObject o) {
+            id = o.optString("v");
+            title = o.optString("t");
+            channel = o.optString("c");
+            area = o.optString("a");
+            category = o.optString("k");
+            why = o.optString("w");
+            score = o.optDouble("s", 0);
+            recommenders = o.optInt("r", 0);
+            firstYear = o.optInt("y", 0);
+            searchText = (title + " " + channel + " " + category).toLowerCase(Locale.ROOT);
+        }
+    }
+
+    private static final class Catalog {
+        final List<Video> videos = new ArrayList<>();
+        final List<String[]> areas = new ArrayList<>(); // {id, name}
+    }
+
+    private static Catalog parse(String json) throws Exception {
+        JSONObject root = new JSONObject(json);
+        Catalog c = new Catalog();
+        JSONArray areas = root.getJSONArray("areas");
+        for (int i = 0; i < areas.length(); i++) {
+            JSONObject a = areas.getJSONObject(i);
+            c.areas.add(new String[]{a.getString("id"), a.getString("name")});
+        }
+        JSONArray videos = root.getJSONArray("videos");
+        for (int i = 0; i < videos.length(); i++) {
+            c.videos.add(new Video(videos.getJSONObject(i)));
+        }
+        return c;
+    }
+
+    private static byte[] download(String url) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        connection.setConnectTimeout(10_000);
+        connection.setReadTimeout(20_000);
+        try {
+            if (connection.getResponseCode() != 200) {
+                throw new IllegalStateException("HTTP " + connection.getResponseCode() + " for " + url);
+            }
+            try (InputStream in = connection.getInputStream()) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buffer = new byte[16 * 1024];
+                int read;
+                while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
+                return out.toByteArray();
+            }
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    /**
+     * Loads the catalog from the cache, downloading it if missing.
+     * A stale cache is used right away and refreshed for the next opening.
+     * Must be called off the main thread.
+     */
+    private static Catalog loadCatalog(Activity activity) throws Exception {
+        if (catalog != null) return catalog;
+
+        File cache = new File(activity.getFilesDir(), "bespoke_catalog.json");
+        if (cache.exists()) {
+            try {
+                Catalog cached = parse(new String(Files.readAllBytes(cache.toPath()), StandardCharsets.UTF_8));
+                if (System.currentTimeMillis() - cache.lastModified() > CATALOG_MAX_AGE_MILLIS) {
+                    Utils.runOnBackgroundThread(() -> refreshCache(cache));
+                }
+                catalog = cached;
+                return cached;
+            } catch (Exception ex) {
+                Logger.printException(() -> "Bespoke feed cache is unreadable, downloading again", ex);
+            }
+        }
+
+        byte[] data = download(CATALOG_URL);
+        Catalog fresh = parse(new String(data, StandardCharsets.UTF_8));
+        writeCache(cache, data);
+        catalog = fresh;
+        return fresh;
+    }
+
+    private static void refreshCache(File cache) {
+        try {
+            byte[] data = download(CATALOG_URL);
+            parse(new String(data, StandardCharsets.UTF_8)); // Validate before replacing.
+            writeCache(cache, data);
+        } catch (Exception ex) {
+            Logger.printInfo(() -> "Bespoke feed catalog refresh failed", ex);
+        }
+    }
+
+    private static void writeCache(File cache, byte[] data) throws Exception {
+        File tmp = new File(cache.getPath() + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            out.write(data);
+        }
+        if (!tmp.renameTo(cache)) throw new IllegalStateException("Could not write " + cache);
+    }
+
+    // endregion
+
+    // region UI
+
+    private static final class Screen {
+        final Activity activity;
+        final int fg, bg, fgSecondary, accent;
+
+        String selectedChip = CHIP_ALL;
+        String query = "";
+        List<Video> shuffled;
+
+        final List<Video> shown = new ArrayList<>();
+        LinearLayout chipRow;
+        TextView status;
+        ListView list;
+        FeedAdapter adapter;
+
+        Screen(Activity activity) {
+            this.activity = activity;
+            fg = Utils.getAppForegroundColor();
+            bg = Utils.getAppBackgroundColor();
+            fgSecondary = (fg & 0x00FFFFFF) | 0x99000000;
+            accent = Color.parseColor("#FF6600"); // Hacker News orange.
+        }
+
+        int dp(float value) {
+            return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value,
+                    activity.getResources().getDisplayMetrics());
+        }
+
+        TextView text(float sp, int color, boolean bold) {
+            TextView t = new TextView(activity);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+            t.setTextColor(color);
+            if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+            return t;
+        }
+
+        void show() {
+            try {
+                String theme = Utils.isDarkModeEnabled()
+                        ? "Theme.YouTube.Settings.Dark"
+                        : "Theme.YouTube.Settings";
+                activity.setTheme(ResourceUtils.getIdentifierOrThrow(ResourceType.STYLE, theme));
+            } catch (Exception ex) {
+                Logger.printInfo(() -> "Bespoke feed could not set theme", ex);
+            }
+
+            LinearLayout root = new LinearLayout(activity);
+            root.setOrientation(LinearLayout.VERTICAL);
+            root.setBackgroundColor(bg);
+            root.setFitsSystemWindows(true);
+
+            // Header.
+            LinearLayout header = new LinearLayout(activity);
+            header.setOrientation(LinearLayout.HORIZONTAL);
+            header.setGravity(Gravity.CENTER_VERTICAL);
+            header.setPadding(dp(4), dp(8), dp(16), dp(4));
+
+            TextView back = text(22, fg, false);
+            back.setText("←");
+            back.setPadding(dp(12), dp(4), dp(12), dp(4));
+            back.setOnClickListener(v -> activity.finish());
+            header.addView(back);
+
+            LinearLayout titles = new LinearLayout(activity);
+            titles.setOrientation(LinearLayout.VERTICAL);
+            TextView title = text(20, fg, true);
+            title.setText("HackerTube");
+            TextView subtitle = text(12, fgSecondary, false);
+            subtitle.setText("Videos Hacker News keeps recommending");
+            titles.addView(title);
+            titles.addView(subtitle);
+            header.addView(titles);
+            root.addView(header);
+
+            // Search.
+            EditText search = new EditText(activity);
+            search.setHint("Search titles, channels, topics");
+            search.setHintTextColor(fgSecondary);
+            search.setTextColor(fg);
+            search.setSingleLine(true);
+            search.setInputType(InputType.TYPE_CLASS_TEXT);
+            search.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+            GradientDrawable searchBg = new GradientDrawable();
+            searchBg.setCornerRadius(dp(20));
+            searchBg.setColor((fg & 0x00FFFFFF) | 0x14000000);
+            search.setBackground(searchBg);
+            search.setPadding(dp(16), dp(10), dp(16), dp(10));
+            LinearLayout.LayoutParams searchParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            searchParams.setMargins(dp(12), dp(4), dp(12), dp(4));
+            root.addView(search, searchParams);
+            search.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+                @Override public void afterTextChanged(Editable s) {
+                    query = s.toString().trim().toLowerCase(Locale.ROOT);
+                    applyFilter();
+                }
+            });
+
+            // Topic chips.
+            HorizontalScrollView chipScroll = new HorizontalScrollView(activity);
+            chipScroll.setHorizontalScrollBarEnabled(false);
+            chipRow = new LinearLayout(activity);
+            chipRow.setOrientation(LinearLayout.HORIZONTAL);
+            chipRow.setPadding(dp(8), dp(4), dp(8), dp(8));
+            chipScroll.addView(chipRow);
+            root.addView(chipScroll);
+
+            status = text(14, fgSecondary, false);
+            status.setGravity(Gravity.CENTER);
+            status.setPadding(dp(24), dp(48), dp(24), dp(48));
+            status.setText("Loading the HackerTube catalog…");
+            root.addView(status, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            list = new ListView(activity);
+            list.setDivider(null);
+            list.setVisibility(View.GONE);
+            TextView footer = text(11, fgSecondary, false);
+            footer.setText(ATTRIBUTION);
+            footer.setGravity(Gravity.CENTER);
+            footer.setPadding(dp(16), dp(16), dp(16), dp(32));
+            list.addFooterView(footer, null, false);
+            adapter = new FeedAdapter();
+            list.setAdapter(adapter);
+            list.setOnItemClickListener((parent, view, position, id) -> {
+                if (position < shown.size()) open(shown.get(position));
+            });
+            root.addView(list, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+            activity.setContentView(root);
+
+            Utils.runOnBackgroundThread(() -> {
+                try {
+                    Catalog c = loadCatalog(activity);
+                    Utils.runOnMainThread(() -> onCatalog(c));
+                } catch (Exception ex) {
+                    Logger.printException(() -> "Bespoke feed could not load the catalog", ex);
+                    Utils.runOnMainThread(() -> status.setText(
+                            "Could not load the catalog. Check your connection and open the feed again."));
+                }
+            });
+        }
+
+        void onCatalog(Catalog c) {
+            if (activity.isFinishing()) return;
+            addChip(CHIP_ALL, "Top");
+            addChip(CHIP_SHUFFLE, "Shuffle");
+            for (String[] area : c.areas) addChip(area[0], area[1]);
+            updateChips();
+            status.setVisibility(View.GONE);
+            list.setVisibility(View.VISIBLE);
+            applyFilter();
+        }
+
+        void addChip(String id, String label) {
+            TextView chip = text(14, fg, false);
+            chip.setText(label);
+            chip.setTag(id);
+            chip.setPadding(dp(14), dp(7), dp(14), dp(7));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            params.setMargins(dp(4), 0, dp(4), 0);
+            chip.setOnClickListener(v -> {
+                if (CHIP_SHUFFLE.equals(id)) shuffled = null; // New shuffle on every tap.
+                selectedChip = id;
+                updateChips();
+                applyFilter();
+                list.setSelection(0);
+            });
+            chipRow.addView(chip, params);
+        }
+
+        void updateChips() {
+            for (int i = 0; i < chipRow.getChildCount(); i++) {
+                TextView chip = (TextView) chipRow.getChildAt(i);
+                boolean selected = selectedChip.equals(chip.getTag());
+                GradientDrawable d = new GradientDrawable();
+                d.setCornerRadius(dp(8));
+                d.setColor(selected ? fg : (fg & 0x00FFFFFF) | 0x1A000000);
+                chip.setBackground(d);
+                chip.setTextColor(selected ? bg : fg);
+            }
+        }
+
+        void applyFilter() {
+            Catalog c = catalog;
+            if (c == null) return;
+            List<Video> source = c.videos;
+            if (CHIP_SHUFFLE.equals(selectedChip)) {
+                if (shuffled == null) {
+                    shuffled = new ArrayList<>(c.videos);
+                    Collections.shuffle(shuffled);
+                }
+                source = shuffled;
+            }
+            shown.clear();
+            for (Video v : source) {
+                if (!CHIP_ALL.equals(selectedChip) && !CHIP_SHUFFLE.equals(selectedChip)
+                        && !selectedChip.equals(v.area)) continue;
+                if (!query.isEmpty() && !v.searchText.contains(query)) continue;
+                shown.add(v);
+            }
+            adapter.notifyDataSetChanged();
+        }
+
+        void open(Video video) {
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://www.youtube.com/watch?v=" + video.id));
+                intent.setPackage(activity.getPackageName());
+                activity.startActivity(intent);
+            } catch (Exception ex) {
+                Logger.printException(() -> "Bespoke feed could not open " + video.id, ex);
+            }
+        }
+
+        final class FeedAdapter extends BaseAdapter {
+            @Override public int getCount() { return shown.size(); }
+            @Override public Object getItem(int position) { return shown.get(position); }
+            @Override public long getItemId(int position) { return position; }
+
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                Row row = convertView == null ? new Row() : (Row) convertView.getTag();
+                row.bind(shown.get(position));
+                return row.view;
+            }
+        }
+
+        final class Row {
+            final LinearLayout view;
+            final ImageView thumbnail;
+            final TextView title, meta, why;
+
+            Row() {
+                view = new LinearLayout(activity);
+                view.setOrientation(LinearLayout.VERTICAL);
+                view.setPadding(0, 0, 0, dp(20));
+                view.setLayoutParams(new AbsListView.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+                // 16:9 frame from the middle of the video, not the uploader's thumbnail.
+                thumbnail = new ImageView(activity) {
+                    @Override
+                    protected void onMeasure(int widthSpec, int heightSpec) {
+                        int width = View.MeasureSpec.getSize(widthSpec);
+                        setMeasuredDimension(width, width * 9 / 16);
+                    }
+                };
+                thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                thumbnail.setBackgroundColor((fg & 0x00FFFFFF) | 0x14000000);
+                view.addView(thumbnail, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+                LinearLayout texts = new LinearLayout(activity);
+                texts.setOrientation(LinearLayout.VERTICAL);
+                texts.setPadding(dp(12), dp(8), dp(12), 0);
+
+                title = text(16, fg, true);
+                title.setMaxLines(2);
+                title.setEllipsize(TextUtils.TruncateAt.END);
+                meta = text(12, fgSecondary, false);
+                meta.setMaxLines(1);
+                meta.setEllipsize(TextUtils.TruncateAt.END);
+                why = text(13, fgSecondary, false);
+                why.setMaxLines(2);
+                why.setEllipsize(TextUtils.TruncateAt.END);
+                why.setPadding(0, dp(4), 0, 0);
+
+                texts.addView(title);
+                texts.addView(meta);
+                texts.addView(why);
+                view.addView(texts);
+                view.setTag(this);
+            }
+
+            void bind(Video v) {
+                title.setText(v.title);
+                StringBuilder m = new StringBuilder();
+                if (!v.channel.isEmpty()) m.append(v.channel).append(" · ");
+                m.append(v.recommenders).append(v.recommenders == 1 ? " HN recommender" : " HN recommenders");
+                if (!v.category.isEmpty()) m.append(" · ").append(v.category);
+                meta.setText(m);
+                why.setText(v.why);
+                why.setVisibility(v.why.isEmpty() ? View.GONE : View.VISIBLE);
+                loadThumbnail(thumbnail, v.id);
+            }
+        }
+    }
+
+    private static void loadThumbnail(ImageView view, String videoId) {
+        view.setTag(videoId);
+        Bitmap cached = THUMBNAILS.get(videoId);
+        if (cached != null) {
+            view.setImageBitmap(cached);
+            return;
+        }
+        view.setImageDrawable(null);
+        IMAGE_EXECUTOR.execute(() -> {
+            try {
+                if (!videoId.equals(view.getTag())) return; // Row was recycled.
+                byte[] data = download("https://i.ytimg.com/vi/" + videoId + "/hq2.jpg");
+                Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
+                if (bitmap == null) return;
+                THUMBNAILS.put(videoId, bitmap);
+                Utils.runOnMainThread(() -> {
+                    if (videoId.equals(view.getTag())) view.setImageBitmap(bitmap);
+                });
+            } catch (Exception ex) {
+                Logger.printDebug(() -> "Bespoke feed thumbnail failed: " + videoId);
+            }
+        });
+    }
+
+    // endregion
+}
