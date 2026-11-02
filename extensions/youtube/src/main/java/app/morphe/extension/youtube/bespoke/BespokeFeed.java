@@ -41,6 +41,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -146,29 +147,63 @@ public final class BespokeFeed {
                 label.setContentDescription("HackerTube");
             }
 
-            // Consume the touches so the Shorts tab is never selected, and open the feed instead.
-            tabView.setOnTouchListener((v, event) -> {
-                switch (event.getActionMasked()) {
-                    case MotionEvent.ACTION_DOWN:
-                        v.setPressed(true);
-                        return true;
-                    case MotionEvent.ACTION_UP:
-                        v.setPressed(false);
-                        if (event.getX() >= 0 && event.getX() <= v.getWidth()
-                                && event.getY() >= 0 && event.getY() <= v.getHeight()) {
-                            openFeed(v.getContext());
-                        }
-                        return true;
-                    case MotionEvent.ACTION_CANCEL:
-                        v.setPressed(false);
-                        return true;
-                    default:
-                        return true;
-                }
-            });
+            shortsTab = new WeakReference<>(tabView);
         } catch (Exception ex) {
             Logger.printException(() -> "Bespoke feed navigationTabCreated failure", ex);
         }
+    }
+
+    /** The Shorts tab, now the HackerTube tab. */
+    private static WeakReference<View> shortsTab = new WeakReference<>(null);
+    /** A touch started on the HackerTube tab and is being consumed. */
+    private static boolean trackingTabTouch;
+
+    /**
+     * Injection point (PivotBar.dispatchTouchEvent, before anything else).
+     * Taps on the HackerTube tab open the feed and never reach YouTube,
+     * so Shorts is not opened.
+     *
+     * @return true if the event is consumed.
+     */
+    public static boolean navigationBarTouched(MotionEvent event) {
+        try {
+            final int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                trackingTabTouch = isOnShortsTab(event);
+                if (trackingTabTouch) setTabPressed(true);
+                return trackingTabTouch;
+            }
+            if (!trackingTabTouch) return false;
+
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                trackingTabTouch = false;
+                setTabPressed(false);
+                if (action == MotionEvent.ACTION_UP && isOnShortsTab(event)) {
+                    View tab = shortsTab.get();
+                    if (tab != null) openFeed(tab.getContext());
+                }
+            }
+            return true;
+        } catch (Exception ex) {
+            Logger.printException(() -> "Bespoke feed navigationBarTouched failure", ex);
+            trackingTabTouch = false;
+            return false;
+        }
+    }
+
+    private static boolean isOnShortsTab(MotionEvent event) {
+        View tab = shortsTab.get();
+        if (tab == null || !tab.isShown()) return false;
+        int[] location = new int[2];
+        tab.getLocationOnScreen(location);
+        final float x = event.getRawX(), y = event.getRawY();
+        return x >= location[0] && x < location[0] + tab.getWidth()
+                && y >= location[1] && y < location[1] + tab.getHeight();
+    }
+
+    private static void setTabPressed(boolean pressed) {
+        View tab = shortsTab.get();
+        if (tab != null) tab.setPressed(pressed);
     }
 
     public static void openFeed(Context context) {
