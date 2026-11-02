@@ -4,7 +4,7 @@ group = "app.morphe"
 
 patches {
     about {
-        name = "Bespoke Patches"
+        name = "HTKarpathyLeGoat"
         description = "Bespoke feed + upstream patches. Compatible with Morphe. Not affiliated with the Morphe project."
         source = "git@github.com:kcabouda/morphe-HackerTube.git"
         author = "kcabouda"
