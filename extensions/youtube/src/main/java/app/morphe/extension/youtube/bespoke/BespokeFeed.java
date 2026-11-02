@@ -48,6 +48,7 @@ import app.morphe.extension.shared.Logger;
 import app.morphe.extension.shared.ResourceType;
 import app.morphe.extension.shared.ResourceUtils;
 import app.morphe.extension.shared.Utils;
+import app.morphe.extension.shared.theme.ThemeUtils;
 
 /**
  * HackerTube-style feed of videos recommended on Hacker News.
@@ -239,8 +240,8 @@ public final class BespokeFeed {
 
         Screen(Activity activity) {
             this.activity = activity;
-            fg = Utils.getAppForegroundColor();
-            bg = Utils.getAppBackgroundColor();
+            fg = ThemeUtils.getAppForegroundColor();
+            bg = ThemeUtils.getAppBackgroundColor();
             fgSecondary = (fg & 0x00FFFFFF) | 0x99000000;
             accent = Color.parseColor("#FF6600"); // Hacker News orange.
         }
