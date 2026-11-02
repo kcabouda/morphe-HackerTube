@@ -1,3 +1,9 @@
+## [2.4.1](https://github.com/kcabouda/morphe-HackerTube/compare/v2.4.0...v2.4.1) (2026-11-02)
+
+### 🐛 Bug Fixes
+
+* **YouTube - Bespoke feed:** HackerTube tab opens Shorts instead of the feed ([6128508](https://github.com/kcabouda/morphe-HackerTube/commit/6128508bc2e68554e2d910125c34a78e0329214c))
+
 ## [2.4.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.3.0...v2.4.0) (2026-11-02)
 
 ### ✨ New Features
