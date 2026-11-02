@@ -4,12 +4,12 @@ group = "app.morphe"
 
 patches {
     about {
-        name = "Morphe Patches"
-        description = "Patches for Morphe"
-        source = "git@github.com:MorpheApp/morphe-patches.git"
-        author = "MorpheApp"
+        name = "Bespoke Patches"
+        description = "Bespoke feed + upstream patches. Compatible with Morphe. Not affiliated with the Morphe project."
+        source = "git@github.com:kcabouda/morphe-HackerTube.git"
+        author = "kcabouda"
         contact = "na"
-        website = "https://morphe.software"
+        website = "https://github.com/kcabouda/morphe-HackerTube"
         license = "GNU General Public License v3.0, with additional GPL section 7 requirements"
     }
 }
