@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-02T23:09:35",
-  "description": "## [2.3.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.2.0...v2.3.0) (2026-11-02)\n\n### 🐛 Bug Fixes\n\n* **YouTube - Bespoke feed:** Use ThemeUtils for the app colors ([965de1c](https://github.com/kcabouda/morphe-HackerTube/commit/965de1c04df47dbe18fef19891bb45a5ab8d5283))\n\n### ✨ New Features\n\n* **YouTube - Bespoke feed:** Add the HackerTube feed screen ([cd6bb8c](https://github.com/kcabouda/morphe-HackerTube/commit/cd6bb8c80fc510eb19adbec2ba61cbdf04003628))",
-  "download_url": "https://github.com/kcabouda/morphe-HackerTube/releases/download/v2.3.0/patches-2.3.0.mpp",
+  "created_at": "2026-11-02T23:23:57",
+  "description": "## [2.4.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.3.0...v2.4.0) (2026-11-02)\n\n### ✨ New Features\n\n* **YouTube - Bespoke feed:** Replace the Shorts tab with a HackerTube tab ([1f7fdda](https://github.com/kcabouda/morphe-HackerTube/commit/1f7fddabea20473e4def6bb8b4bcdff8d775c915))",
+  "download_url": "https://github.com/kcabouda/morphe-HackerTube/releases/download/v2.4.0/patches-2.4.0.mpp",
   "signature_download_url": "",
-  "version": "2.3.0"
+  "version": "2.4.0"
 }

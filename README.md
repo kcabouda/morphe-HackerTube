@@ -35,7 +35,7 @@ All modifications made by Morphe, along with their dates, can be found in the Gi
 ## 🩹 Patches list
 
 <!-- PATCHES_START -->
-> **[v2.3.0](https://github.com/kcabouda/morphe-HackerTube/releases/tag/v2.3.0)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;195 patches total
+> **[v2.4.0](https://github.com/kcabouda/morphe-HackerTube/releases/tag/v2.4.0)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;195 patches total
 <details>
 <summary>📦 YouTube&nbsp;&nbsp;•&nbsp;&nbsp;110 patches</summary>
 <br>
@@ -52,7 +52,7 @@ All modifications made by Morphe, along with their dates, can be found in the Gi
 | [Ambient mode](#ambient-mode) | Forces Ambient mode on and adds options to bypass power saving restrictions for Ambient mode and disable it entirely or in fullscreen. |  |
 | [App refresh rate](#app-refresh-rate) | Adds an option to change the app refresh rate. |  |
 | [Ask flyout menu](#ask-flyout-menu) | Adds a video menu entry that opens Ask for the video and summarizes the video. This patch works with YouTube 21.16.256 and newer. |  |
-| [Bespoke feed](#bespoke-feed) | Adds a curated feed of videos recommended on Hacker News (HackerTube data). |  |
+| [Bespoke feed](#bespoke-feed) | Replaces the Shorts tab with a HackerTube feed of videos recommended on Hacker News. |  |
 | [Bypass image region restrictions](#bypass-image-region-restrictions) | Adds an option to use a different host for user avatar and channel images and can fix missing images that are blocked in some countries. |  |
 | [Bypass link redirects](#bypass-link-redirects) | Adds an option to bypass redirects and open the original link directly. |  |
 | [Captions](#captions) | Adds options to disable captions from being automatically enabled, select a preferred caption language, add more auto-translate languages, and show captions in picture-in-picture. |  |
