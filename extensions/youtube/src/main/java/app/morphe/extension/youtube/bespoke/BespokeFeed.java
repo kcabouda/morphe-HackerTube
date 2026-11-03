@@ -48,8 +48,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -81,8 +83,6 @@ public final class BespokeFeed {
     private static final String ATTRIBUTION =
             "Data: HackerTube (hackertube.org) · Hacker News via open-index/hacker-news · ODC-By 1.0";
 
-    private static final String CHIP_ALL = "__all";
-    private static final String CHIP_SHUFFLE = "__shuffle";
 
     private static final ExecutorService IMAGE_EXECUTOR = Executors.newFixedThreadPool(4);
     private static final LruCache<String, Bitmap> THUMBNAILS =
@@ -332,12 +332,15 @@ public final class BespokeFeed {
 
     // region Data
 
+    private static final int MIN_CATALOG_VERSION = 2;
+
     private static final class Video {
-        final String id, title, channel, area, category, why;
+        final String id, title, channel, area, category, why, type, level;
+        final String[] categories;
         final double score;
-        final int recommenders;
-        final int firstYear;
+        final int recommenders, strongRecs, firstYear;
         final String searchText;
+        int rank;
 
         Video(JSONObject o) {
             id = o.optString("v");
@@ -346,30 +349,92 @@ public final class BespokeFeed {
             area = o.optString("a");
             category = o.optString("k");
             why = o.optString("w");
+            type = o.optString("ty");
+            level = o.optString("lv");
             score = o.optDouble("s", 0);
             recommenders = o.optInt("r", 0);
+            strongRecs = o.optInt("sr", 0);
             firstYear = o.optInt("y", 0);
-            searchText = (title + " " + channel + " " + category).toLowerCase(Locale.ROOT);
+            JSONArray cs = o.optJSONArray("cs");
+            categories = new String[cs == null ? 0 : cs.length()];
+            for (int i = 0; i < categories.length; i++) categories[i] = cs.optString(i);
+            searchText = (title + " " + channel + " " + category + " " + type).toLowerCase(Locale.ROOT);
+        }
+
+        boolean inCategory(String categoryId) {
+            for (String c : categories) if (c.equals(categoryId)) return true;
+            return false;
+        }
+    }
+
+    private static final class Category {
+        final String id, name, area;
+
+        Category(String id, String name, String area) {
+            this.id = id;
+            this.name = name;
+            this.area = area;
         }
     }
 
     private static final class Catalog {
+        int version;
         final List<Video> videos = new ArrayList<>();
+        final Map<String, Video> byId = new HashMap<>();
         final List<String[]> areas = new ArrayList<>(); // {id, name}
+        final List<Category> categories = new ArrayList<>();
+        final Map<String, String> categoryArea = new HashMap<>();
+        final List<String> types = new ArrayList<>();
+        /** Strong picks outside the top: many strong recommendations, lower overall score. */
+        final List<Video> deepCuts = new ArrayList<>();
+
+        boolean inArea(Video v, String areaId) {
+            if (areaId.equals(v.area)) return true;
+            for (String c : v.categories) if (areaId.equals(categoryArea.get(c))) return true;
+            return false;
+        }
     }
 
     private static Catalog parse(String json) throws Exception {
         JSONObject root = new JSONObject(json);
         Catalog c = new Catalog();
+        c.version = root.optInt("version", 1);
         JSONArray areas = root.getJSONArray("areas");
         for (int i = 0; i < areas.length(); i++) {
             JSONObject a = areas.getJSONObject(i);
             c.areas.add(new String[]{a.getString("id"), a.getString("name")});
         }
-        JSONArray videos = root.getJSONArray("videos");
-        for (int i = 0; i < videos.length(); i++) {
-            c.videos.add(new Video(videos.getJSONObject(i)));
+        JSONArray categories = root.optJSONArray("categories");
+        if (categories != null) {
+            for (int i = 0; i < categories.length(); i++) {
+                JSONObject k = categories.getJSONObject(i);
+                Category category = new Category(k.getString("id"), k.getString("name"), k.getString("area"));
+                c.categories.add(category);
+                c.categoryArea.put(category.id, category.area);
+            }
         }
+        JSONArray videos = root.getJSONArray("videos");
+        Map<String, Integer> typeCounts = new HashMap<>();
+        for (int i = 0; i < videos.length(); i++) {
+            Video v = new Video(videos.getJSONObject(i));
+            v.rank = i;
+            c.videos.add(v);
+            c.byId.put(v.id, v);
+            if (!v.type.isEmpty()) {
+                Integer count = typeCounts.get(v.type);
+                typeCounts.put(v.type, count == null ? 1 : count + 1);
+            }
+        }
+        c.types.addAll(typeCounts.keySet());
+        c.types.sort((a, b) -> typeCounts.get(b) - typeCounts.get(a));
+
+        for (Video v : c.videos) {
+            if (v.rank >= 400 && v.strongRecs >= 2) c.deepCuts.add(v);
+        }
+        c.deepCuts.sort((a, b) -> {
+            int byStrong = b.strongRecs - a.strongRecs;
+            return byStrong != 0 ? byStrong : Double.compare(b.score, a.score);
+        });
         return c;
     }
 
@@ -394,22 +459,24 @@ public final class BespokeFeed {
     }
 
     /**
-     * Loads the catalog from the cache, downloading it if missing.
+     * Loads the catalog from the cache, downloading it if missing or too old a format.
      * A stale cache is used right away and refreshed for the next opening.
      * Must be called off the main thread.
      */
-    private static Catalog loadCatalog(Activity activity) throws Exception {
+    private static Catalog loadCatalog(Context context) throws Exception {
         if (catalog != null) return catalog;
 
-        File cache = new File(activity.getFilesDir(), "bespoke_catalog.json");
+        File cache = new File(context.getFilesDir(), "bespoke_catalog.json");
         if (cache.exists()) {
             try {
                 Catalog cached = parse(new String(Files.readAllBytes(cache.toPath()), StandardCharsets.UTF_8));
-                if (System.currentTimeMillis() - cache.lastModified() > CATALOG_MAX_AGE_MILLIS) {
-                    Utils.runOnBackgroundThread(() -> refreshCache(cache));
+                if (cached.version >= MIN_CATALOG_VERSION) {
+                    if (System.currentTimeMillis() - cache.lastModified() > CATALOG_MAX_AGE_MILLIS) {
+                        Utils.runOnBackgroundThread(() -> refreshCache(cache));
+                    }
+                    catalog = cached;
+                    return cached;
                 }
-                catalog = cached;
-                return cached;
             } catch (Exception ex) {
                 Logger.printException(() -> "Bespoke feed cache is unreadable, downloading again", ex);
             }
@@ -444,28 +511,48 @@ public final class BespokeFeed {
 
     // region UI
 
+    private enum Mode {EXPLORE, LIKED, SAVED, HISTORY}
+
+    private enum Sort {TOP, SHUFFLE, DEEP_CUTS, NEWEST_ON_HN}
+
+    private static String label(String raw) {
+        if (raw.isEmpty()) return raw;
+        return Character.toUpperCase(raw.charAt(0)) + raw.substring(1);
+    }
+
     private static final class Screen {
         final Activity activity;
-        final int fg, bg, fgSecondary, accent;
+        final boolean embedded;
+        final FeedMemory memory;
+        final int fg, bg, fgSecondary, chipBg, accent;
 
-        String selectedChip = CHIP_ALL;
+        // State.
+        Mode mode = Mode.EXPLORE;
+        Sort sort = Sort.TOP;
+        String areaId = null;
+        String categoryId = null;
+        final java.util.Set<String> types = new java.util.HashSet<>();
+        final java.util.Set<String> levels = new java.util.HashSet<>();
+        boolean hideWatched;
         String query = "";
         List<Video> shuffled;
 
+        // Views.
         final List<Video> shown = new ArrayList<>();
-        LinearLayout chipRow;
-        TextView status;
+        LinearLayout modeRow, sortRow, areaRow, categoryRow;
+        View sortScroll, areaScroll, categoryScroll;
+        TextView status, empty;
         ListView list;
         FeedAdapter adapter;
-
-        final boolean embedded;
 
         Screen(Activity activity, boolean embedded) {
             this.activity = activity;
             this.embedded = embedded;
+            memory = FeedMemory.get(activity);
             fg = ThemeUtils.getAppForegroundColor();
             bg = ThemeUtils.getAppBackgroundColor();
             fgSecondary = (fg & 0x00FFFFFF) | 0x99000000;
+            chipBg = (fg & 0x00FFFFFF) | 0x1A000000;
             accent = Color.parseColor("#FF6600"); // Hacker News orange.
         }
 
@@ -491,8 +578,19 @@ public final class BespokeFeed {
             } catch (Exception ex) {
                 Logger.printInfo(() -> "Bespoke feed could not set theme", ex);
             }
-
             activity.setContentView(build());
+        }
+
+        LinearLayout chipRow(LinearLayout parent, View[] scrollOut) {
+            HorizontalScrollView scroll = new HorizontalScrollView(activity);
+            scroll.setHorizontalScrollBarEnabled(false);
+            LinearLayout row = new LinearLayout(activity);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setPadding(dp(8), dp(3), dp(8), dp(3));
+            scroll.addView(row);
+            parent.addView(scroll);
+            scrollOut[0] = scroll;
+            return row;
         }
 
         View build() {
@@ -554,14 +652,15 @@ public final class BespokeFeed {
                 }
             });
 
-            // Topic chips.
-            HorizontalScrollView chipScroll = new HorizontalScrollView(activity);
-            chipScroll.setHorizontalScrollBarEnabled(false);
-            chipRow = new LinearLayout(activity);
-            chipRow.setOrientation(LinearLayout.HORIZONTAL);
-            chipRow.setPadding(dp(8), dp(4), dp(8), dp(8));
-            chipScroll.addView(chipRow);
-            root.addView(chipScroll);
+            View[] scroll = new View[1];
+            modeRow = chipRow(root, scroll);
+            sortRow = chipRow(root, scroll);
+            sortScroll = scroll[0];
+            areaRow = chipRow(root, scroll);
+            areaScroll = scroll[0];
+            categoryRow = chipRow(root, scroll);
+            categoryScroll = scroll[0];
+            categoryScroll.setVisibility(View.GONE);
 
             status = text(14, fgSecondary, false);
             status.setGravity(Gravity.CENTER);
@@ -573,6 +672,11 @@ public final class BespokeFeed {
             list = new ListView(activity);
             list.setDivider(null);
             list.setVisibility(View.GONE);
+            empty = text(14, fgSecondary, false);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(24), dp(32), dp(24), dp(8));
+            empty.setVisibility(View.GONE);
+            list.addHeaderView(empty, null, false);
             TextView footer = text(11, fgSecondary, false);
             footer.setText(ATTRIBUTION);
             footer.setGravity(Gravity.CENTER);
@@ -580,9 +684,6 @@ public final class BespokeFeed {
             list.addFooterView(footer, null, false);
             adapter = new FeedAdapter();
             list.setAdapter(adapter);
-            list.setOnItemClickListener((parent, view, position, id) -> {
-                if (position < shown.size()) open(shown.get(position));
-            });
             root.addView(list, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -605,7 +706,6 @@ public final class BespokeFeed {
          * The browse page extends behind the navigation bar.
          * Pad the list so its end is not hidden below the bar.
          */
-        @SuppressWarnings("deprecation")
         void keepAboveNavigationBar(View root) {
             list.setClipToPadding(false);
             root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
@@ -631,76 +731,232 @@ public final class BespokeFeed {
         }
 
         void onCatalog(Catalog c) {
-            if (activity.isFinishing() || chipRow.getChildCount() > 0) return;
-            addChip(CHIP_ALL, "Top");
-            addChip(CHIP_SHUFFLE, "Shuffle");
-            for (String[] area : c.areas) addChip(area[0], area[1]);
-            updateChips();
+            if (activity.isFinishing() || modeRow.getChildCount() > 0) return;
             status.setVisibility(View.GONE);
             list.setVisibility(View.VISIBLE);
+            rebuildChips();
             applyFilter();
         }
 
-        void addChip(String id, String label) {
-            TextView chip = text(14, fg, false);
+        // region Chips
+
+        TextView chip(LinearLayout row, String label, boolean selected, View.OnClickListener onClick) {
+            TextView chip = text(14, selected ? bg : fg, false);
             chip.setText(label);
-            chip.setTag(id);
             chip.setPadding(dp(14), dp(7), dp(14), dp(7));
+            GradientDrawable d = new GradientDrawable();
+            d.setCornerRadius(dp(8));
+            d.setColor(selected ? fg : chipBg);
+            chip.setBackground(d);
+            chip.setOnClickListener(onClick);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             params.setMargins(dp(4), 0, dp(4), 0);
-            chip.setOnClickListener(v -> {
-                if (CHIP_SHUFFLE.equals(id)) shuffled = null; // New shuffle on every tap.
-                selectedChip = id;
-                updateChips();
-                applyFilter();
-                list.setSelection(0);
-            });
-            chipRow.addView(chip, params);
+            row.addView(chip, params);
+            return chip;
         }
 
-        void updateChips() {
-            for (int i = 0; i < chipRow.getChildCount(); i++) {
-                TextView chip = (TextView) chipRow.getChildAt(i);
-                boolean selected = selectedChip.equals(chip.getTag());
-                GradientDrawable d = new GradientDrawable();
-                d.setCornerRadius(dp(8));
-                d.setColor(selected ? fg : (fg & 0x00FFFFFF) | 0x1A000000);
-                chip.setBackground(d);
-                chip.setTextColor(selected ? bg : fg);
+        void rebuildChips() {
+            Catalog c = catalog;
+            if (c == null) return;
+
+            modeRow.removeAllViews();
+            chip(modeRow, "Explore", mode == Mode.EXPLORE, v -> setMode(Mode.EXPLORE));
+            chip(modeRow, "♥ Liked " + memory.size(FeedMemory.LIKED), mode == Mode.LIKED, v -> setMode(Mode.LIKED));
+            chip(modeRow, "★ Saved " + memory.size(FeedMemory.SAVED), mode == Mode.SAVED, v -> setMode(Mode.SAVED));
+            chip(modeRow, "History", mode == Mode.HISTORY, v -> setMode(Mode.HISTORY));
+
+            boolean explore = mode == Mode.EXPLORE;
+            sortScroll.setVisibility(explore ? View.VISIBLE : View.GONE);
+            areaScroll.setVisibility(explore ? View.VISIBLE : View.GONE);
+            categoryScroll.setVisibility(explore && areaId != null ? View.VISIBLE : View.GONE);
+            if (!explore) return;
+
+            sortRow.removeAllViews();
+            chip(sortRow, "Top", sort == Sort.TOP, v -> setSort(Sort.TOP));
+            chip(sortRow, "Shuffle", sort == Sort.SHUFFLE, v -> {
+                shuffled = null; // A new shuffle on every tap.
+                setSort(Sort.SHUFFLE);
+            });
+            chip(sortRow, "Deep cuts", sort == Sort.DEEP_CUTS, v -> setSort(Sort.DEEP_CUTS));
+            chip(sortRow, "Newest on HN", sort == Sort.NEWEST_ON_HN, v -> setSort(Sort.NEWEST_ON_HN));
+            chip(sortRow, types.isEmpty() ? "Type ▾" : "Type (" + types.size() + ") ▾",
+                    !types.isEmpty(), v -> pickMany("Type", c.types, types));
+            chip(sortRow, levels.isEmpty() ? "Level ▾" : "Level (" + levels.size() + ") ▾",
+                    !levels.isEmpty(), v -> pickMany("Level",
+                            java.util.Arrays.asList("intro", "general", "intermediate", "advanced"), levels));
+            chip(sortRow, "Hide watched", hideWatched, v -> {
+                hideWatched = !hideWatched;
+                refresh(true);
+            });
+
+            areaRow.removeAllViews();
+            chip(areaRow, "All topics", areaId == null, v -> setArea(null));
+            for (String[] area : c.areas) {
+                chip(areaRow, area[1], area[0].equals(areaId), v -> setArea(area[0]));
             }
+
+            categoryRow.removeAllViews();
+            if (areaId != null) {
+                chip(categoryRow, "All", categoryId == null, v -> setCategory(null));
+                for (Category category : c.categories) {
+                    if (!category.area.equals(areaId)) continue;
+                    chip(categoryRow, category.name, category.id.equals(categoryId), v -> setCategory(category.id));
+                }
+            }
+        }
+
+        void pickMany(String title, List<String> options, java.util.Set<String> selected) {
+            String[] labels = new String[options.size()];
+            boolean[] checked = new boolean[options.size()];
+            for (int i = 0; i < labels.length; i++) {
+                labels[i] = label(options.get(i));
+                checked[i] = selected.contains(options.get(i));
+            }
+            new android.app.AlertDialog.Builder(activity)
+                    .setTitle(title)
+                    .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) -> checked[which] = isChecked)
+                    .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                        selected.clear();
+                        for (int i = 0; i < checked.length; i++) if (checked[i]) selected.add(options.get(i));
+                        refresh(true);
+                    })
+                    .setNeutralButton("Clear", (dialog, which) -> {
+                        selected.clear();
+                        refresh(true);
+                    })
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
+        }
+
+        void setMode(Mode mode) {
+            this.mode = mode;
+            refresh(true);
+        }
+
+        void setSort(Sort sort) {
+            this.sort = sort;
+            refresh(true);
+        }
+
+        void setArea(String areaId) {
+            this.areaId = areaId;
+            this.categoryId = null;
+            refresh(true);
+        }
+
+        void setCategory(String categoryId) {
+            this.categoryId = categoryId;
+            refresh(true);
+        }
+
+        void refresh(boolean scrollToTop) {
+            rebuildChips();
+            applyFilter();
+            if (scrollToTop) list.setSelection(0);
+        }
+
+        // endregion
+
+        List<Video> source(Catalog c) {
+            switch (mode) {
+                case LIKED: return fromIds(c, memory.ids(FeedMemory.LIKED));
+                case SAVED: return fromIds(c, memory.ids(FeedMemory.SAVED));
+                case HISTORY: return fromIds(c, memory.ids(FeedMemory.WATCHED));
+                default:
+            }
+            switch (sort) {
+                case SHUFFLE:
+                    if (shuffled == null) {
+                        shuffled = new ArrayList<>(c.videos);
+                        Collections.shuffle(shuffled);
+                    }
+                    return shuffled;
+                case DEEP_CUTS:
+                    return c.deepCuts;
+                case NEWEST_ON_HN: {
+                    List<Video> newest = new ArrayList<>(c.videos);
+                    newest.sort((a, b) -> {
+                        int byYear = b.firstYear - a.firstYear;
+                        return byYear != 0 ? byYear : Double.compare(b.score, a.score);
+                    });
+                    return newest;
+                }
+                default:
+                    return c.videos;
+            }
+        }
+
+        List<Video> fromIds(Catalog c, List<String> ids) {
+            List<Video> videos = new ArrayList<>();
+            for (String id : ids) {
+                Video v = c.byId.get(id);
+                if (v != null) videos.add(v);
+            }
+            return videos;
         }
 
         void applyFilter() {
             Catalog c = catalog;
             if (c == null) return;
-            List<Video> source = c.videos;
-            if (CHIP_SHUFFLE.equals(selectedChip)) {
-                if (shuffled == null) {
-                    shuffled = new ArrayList<>(c.videos);
-                    Collections.shuffle(shuffled);
-                }
-                source = shuffled;
-            }
+            final boolean explore = mode == Mode.EXPLORE;
             shown.clear();
-            for (Video v : source) {
-                if (!CHIP_ALL.equals(selectedChip) && !CHIP_SHUFFLE.equals(selectedChip)
-                        && !selectedChip.equals(v.area)) continue;
+            for (Video v : source(c)) {
                 if (!query.isEmpty() && !v.searchText.contains(query)) continue;
+                if (!explore) {
+                    shown.add(v);
+                    continue;
+                }
+                if (memory.contains(FeedMemory.HIDDEN, v.id)) continue;
+                if (hideWatched && memory.contains(FeedMemory.WATCHED, v.id)) continue;
+                if (areaId != null && !c.inArea(v, areaId)) continue;
+                if (categoryId != null && !v.inCategory(categoryId)) continue;
+                if (!types.isEmpty() && !types.contains(v.type)) continue;
+                if (!levels.isEmpty() && !levels.contains(v.level)) continue;
                 shown.add(v);
             }
+
+            String emptyText = null;
+            if (shown.isEmpty()) {
+                switch (mode) {
+                    case LIKED: emptyText = "Nothing liked yet. Tap ♡ Like on a video."; break;
+                    case SAVED: emptyText = "Nothing saved yet. Tap ☆ Save on a video to watch it later."; break;
+                    case HISTORY: emptyText = "Videos you open from HackerTube show up here."; break;
+                    default: emptyText = "No videos match. Try fewer filters.";
+                }
+            } else if (explore) {
+                emptyText = shown.size() + (shown.size() == 1 ? " video" : " videos");
+            }
+            empty.setText(emptyText);
+            empty.setVisibility(emptyText == null ? View.GONE : View.VISIBLE);
+            empty.setPadding(dp(24), dp(shown.isEmpty() ? 32 : 4), dp(24), dp(shown.isEmpty() ? 8 : 4));
             adapter.notifyDataSetChanged();
         }
 
         void open(Video video) {
             try {
+                memory.add(FeedMemory.WATCHED, video.id);
                 Intent intent = new Intent(Intent.ACTION_VIEW,
                         Uri.parse("https://www.youtube.com/watch?v=" + video.id));
                 intent.setPackage(activity.getPackageName());
                 activity.startActivity(intent);
+                // Show the watched state when coming back.
+                Utils.runOnMainThread(() -> {
+                    rebuildChips();
+                    adapter.notifyDataSetChanged();
+                });
             } catch (Exception ex) {
                 Logger.printException(() -> "Bespoke feed could not open " + video.id, ex);
             }
+        }
+
+        void toggle(String listName, Video video) {
+            boolean added = memory.toggle(listName, video.id);
+            if (FeedMemory.HIDDEN.equals(listName) && added) {
+                Utils.showToastShort("Hidden. You won't see this video in Explore.");
+            }
+            rebuildChips();
+            applyFilter();
         }
 
         final class FeedAdapter extends BaseAdapter {
@@ -719,14 +975,17 @@ public final class BespokeFeed {
         final class Row {
             final LinearLayout view;
             final ImageView thumbnail;
-            final TextView title, meta, why;
+            final TextView title, meta, why, like, save, hide;
+            Video video;
 
             Row() {
                 view = new LinearLayout(activity);
                 view.setOrientation(LinearLayout.VERTICAL);
-                view.setPadding(0, 0, 0, dp(20));
+                view.setPadding(0, 0, 0, dp(16));
                 view.setLayoutParams(new AbsListView.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                // Cards handle their own taps, so the action buttons stay tappable.
+                view.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
 
                 // 16:9 frame from the middle of the video, not the uploader's thumbnail.
                 thumbnail = new ImageView(activity) {
@@ -749,7 +1008,7 @@ public final class BespokeFeed {
                 title.setMaxLines(2);
                 title.setEllipsize(TextUtils.TruncateAt.END);
                 meta = text(12, fgSecondary, false);
-                meta.setMaxLines(1);
+                meta.setMaxLines(2);
                 meta.setEllipsize(TextUtils.TruncateAt.END);
                 why = text(13, fgSecondary, false);
                 why.setMaxLines(2);
@@ -759,19 +1018,75 @@ public final class BespokeFeed {
                 texts.addView(title);
                 texts.addView(meta);
                 texts.addView(why);
+
+                LinearLayout actions = new LinearLayout(activity);
+                actions.setOrientation(LinearLayout.HORIZONTAL);
+                actions.setPadding(0, dp(6), 0, 0);
+                like = action(actions);
+                save = action(actions);
+                hide = action(actions);
+                hide.setText("Not interested");
+                texts.addView(actions);
                 view.addView(texts);
+
+                View.OnClickListener openListener = v -> {
+                    if (video != null) open(video);
+                };
+                thumbnail.setOnClickListener(openListener);
+                title.setOnClickListener(openListener);
+                why.setOnClickListener(openListener);
+                meta.setOnClickListener(openListener);
+                like.setOnClickListener(v -> {
+                    if (video != null) toggle(FeedMemory.LIKED, video);
+                });
+                save.setOnClickListener(v -> {
+                    if (video != null) toggle(FeedMemory.SAVED, video);
+                });
+                hide.setOnClickListener(v -> {
+                    if (video != null) toggle(FeedMemory.HIDDEN, video);
+                });
                 view.setTag(this);
             }
 
+            TextView action(LinearLayout parent) {
+                TextView t = text(13, fg, false);
+                t.setPadding(dp(12), dp(6), dp(12), dp(6));
+                GradientDrawable d = new GradientDrawable();
+                d.setCornerRadius(dp(16));
+                d.setColor(chipBg);
+                t.setBackground(d);
+                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                params.setMargins(0, 0, dp(8), 0);
+                parent.addView(t, params);
+                return t;
+            }
+
             void bind(Video v) {
+                video = v;
                 title.setText(v.title);
                 StringBuilder m = new StringBuilder();
                 if (!v.channel.isEmpty()) m.append(v.channel).append(" · ");
                 m.append(v.recommenders).append(v.recommenders == 1 ? " HN recommender" : " HN recommenders");
                 if (!v.category.isEmpty()) m.append(" · ").append(v.category);
+                if (!v.type.isEmpty()) m.append(" · ").append(label(v.type));
+                boolean watched = memory.contains(FeedMemory.WATCHED, v.id);
+                if (watched && mode != Mode.HISTORY) m.append(" · Watched");
                 meta.setText(m);
                 why.setText(v.why);
                 why.setVisibility(v.why.isEmpty() ? View.GONE : View.VISIBLE);
+
+                boolean liked = memory.contains(FeedMemory.LIKED, v.id);
+                like.setText(liked ? "♥ Liked" : "♡ Like");
+                like.setTextColor(liked ? accent : fg);
+                boolean saved = memory.contains(FeedMemory.SAVED, v.id);
+                save.setText(saved ? "★ Saved" : "☆ Save");
+                save.setTextColor(saved ? accent : fg);
+                boolean hidden = memory.contains(FeedMemory.HIDDEN, v.id);
+                hide.setText(hidden ? "Show again" : "Not interested");
+                hide.setVisibility(mode == Mode.EXPLORE || hidden ? View.VISIBLE : View.GONE);
+
+                thumbnail.setAlpha(watched && mode == Mode.EXPLORE ? 0.55f : 1f);
                 loadThumbnail(thumbnail, v.id);
             }
         }

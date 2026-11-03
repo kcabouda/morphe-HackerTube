@@ -17,6 +17,7 @@ OUT = Path(__file__).with_name("catalog.json")
 def main(src: str) -> None:
     videos = []
     areas = {}
+    categories = {}
     for line in Path(src).read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -27,6 +28,9 @@ def main(src: str) -> None:
         cat = r["categories"][0] if r.get("categories") else None
         area = cat["area"] if cat else "other"
         areas[area] = cat["area_name"] if cat else "Other"
+        for c in r.get("categories") or []:
+            categories[c["id"]] = {"id": c["id"], "name": c["name"], "area": c["area"]}
+            areas[c["area"]] = c["area_name"]
         videos.append({
             "v": r["vid"],
             "t": r["title"],
@@ -37,14 +41,19 @@ def main(src: str) -> None:
             "r": r["hn"]["recommenders"],
             "y": r["hn"].get("first_year"),
             "w": r.get("why_hn") or "",
+            "cs": [c["id"] for c in r.get("categories") or []],
+            "ty": r.get("content_type") or "",
+            "lv": r.get("level") or "",
+            "sr": r["hn"].get("strong_recs", 0),
         })
 
     videos.sort(key=lambda x: -x["s"])
     catalog = {
         "format": "bespoke-catalog",
-        "version": 1,
+        "version": 2,
         "source": "HackerTube data export 2026-10-31 (hackertube.org/data), ODC-By 1.0",
         "areas": [{"id": k, "name": v} for k, v in sorted(areas.items(), key=lambda kv: kv[1])],
+        "categories": sorted(categories.values(), key=lambda c: c["name"]),
         "videos": videos,
     }
     OUT.write_text(json.dumps(catalog, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")

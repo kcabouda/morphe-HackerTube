@@ -7,7 +7,7 @@
 
 What was changed: kept only videos with at least one Hacker News recommender and
 dropped `shelf_life == "news"` videos; kept a subset of fields (id, title, channel,
-first topic, score, recommender count, first year, "why HN" summary). See
+topics, score, recommender and strong-recommendation counts, first year, content type, level, "why HN" summary). See
 `build_catalog.py`.
 
 Attribution:
