@@ -1,3 +1,9 @@
+## [2.8.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.7.0...v2.8.0) (2026-11-03)
+
+### ✨ New Features
+
+* **YouTube - Bespoke feed:** Export, import and reset the feed memory ([bc8dfd9](https://github.com/kcabouda/morphe-HackerTube/commit/bc8dfd972c8b02b939b3cbc4b0c13fd077057ca7))
+
 ## [2.7.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.6.0...v2.7.0) (2026-11-03)
 
 ### ✨ New Features
