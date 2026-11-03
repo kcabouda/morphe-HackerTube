@@ -332,11 +332,12 @@ public final class BespokeFeed {
 
     // region Data
 
-    private static final int MIN_CATALOG_VERSION = 2;
+    private static final int MIN_CATALOG_VERSION = 3;
 
     private static final class Video {
         final String id, title, channel, area, category, why, type, level;
         final String[] categories;
+        final String[] tags;
         final double score;
         final int recommenders, strongRecs, firstYear;
         final String searchText;
@@ -358,7 +359,22 @@ public final class BespokeFeed {
             JSONArray cs = o.optJSONArray("cs");
             categories = new String[cs == null ? 0 : cs.length()];
             for (int i = 0; i < categories.length; i++) categories[i] = cs.optString(i);
-            searchText = (title + " " + channel + " " + category + " " + type).toLowerCase(Locale.ROOT);
+            JSONArray tg = o.optJSONArray("tg");
+            tags = new String[tg == null ? 0 : tg.length()];
+            for (int i = 0; i < tags.length; i++) tags[i] = tg.optString(i);
+            searchText = (title + " " + channel + " " + category + " " + type + " "
+                    + TextUtils.join(" ", tags)).toLowerCase(Locale.ROOT);
+        }
+
+        /** Features used by the For you ranking. */
+        String[] features() {
+            List<String> f = new ArrayList<>();
+            for (String c : categories) f.add("c:" + c);
+            for (String t : tags) f.add("t:" + t);
+            if (!channel.isEmpty()) f.add("ch:" + channel.toLowerCase(Locale.ROOT));
+            if (!type.isEmpty()) f.add("ty:" + type);
+            if (!area.isEmpty()) f.add("a:" + area);
+            return f.toArray(new String[0]);
         }
 
         boolean inCategory(String categoryId) {
@@ -385,6 +401,8 @@ public final class BespokeFeed {
         final List<Category> categories = new ArrayList<>();
         final Map<String, String> categoryArea = new HashMap<>();
         final List<String> types = new ArrayList<>();
+        final Map<String, String> areaNames = new HashMap<>();
+        ForYou.Model forYou;
         /** Strong picks outside the top: many strong recommendations, lower overall score. */
         final List<Video> deepCuts = new ArrayList<>();
 
@@ -403,6 +421,7 @@ public final class BespokeFeed {
         for (int i = 0; i < areas.length(); i++) {
             JSONObject a = areas.getJSONObject(i);
             c.areas.add(new String[]{a.getString("id"), a.getString("name")});
+            c.areaNames.put(a.getString("id"), a.getString("name"));
         }
         JSONArray categories = root.optJSONArray("categories");
         if (categories != null) {
@@ -435,6 +454,17 @@ public final class BespokeFeed {
             int byStrong = b.strongRecs - a.strongRecs;
             return byStrong != 0 ? byStrong : Double.compare(b.score, a.score);
         });
+
+        List<String[]> features = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
+        double[] scores = new double[c.videos.size()];
+        for (int i = 0; i < c.videos.size(); i++) {
+            Video v = c.videos.get(i);
+            features.add(v.features());
+            ids.add(v.id);
+            scores[i] = v.score;
+        }
+        c.forYou = new ForYou.Model(features, ids, scores);
         return c;
     }
 
@@ -511,7 +541,7 @@ public final class BespokeFeed {
 
     // region UI
 
-    private enum Mode {EXPLORE, LIKED, SAVED, HISTORY}
+    private enum Mode {FOR_YOU, EXPLORE, LIKED, SAVED, HISTORY}
 
     private enum Sort {TOP, SHUFFLE, DEEP_CUTS, NEWEST_ON_HN}
 
@@ -527,7 +557,11 @@ public final class BespokeFeed {
         final int fg, bg, fgSecondary, chipBg, accent;
 
         // State.
-        Mode mode = Mode.EXPLORE;
+        Mode mode;
+        /** For you picks, computed when For you is opened. */
+        List<Video> forYouVideos;
+        final Map<String, String> forYouReasons = new HashMap<>();
+        final long forYouSeed = System.currentTimeMillis();
         Sort sort = Sort.TOP;
         String areaId = null;
         String categoryId = null;
@@ -541,7 +575,8 @@ public final class BespokeFeed {
         final List<Video> shown = new ArrayList<>();
         LinearLayout modeRow, sortRow, areaRow, categoryRow;
         View sortScroll, areaScroll, categoryScroll;
-        TextView status, empty;
+        TextView empty;
+        View topBlock;
         ListView list;
         FeedAdapter adapter;
 
@@ -554,6 +589,9 @@ public final class BespokeFeed {
             fgSecondary = (fg & 0x00FFFFFF) | 0x99000000;
             chipBg = (fg & 0x00FFFFFF) | 0x1A000000;
             accent = Color.parseColor("#FF6600"); // Hacker News orange.
+            boolean hasTaste = memory.size(FeedMemory.LIKED) + memory.size(FeedMemory.SAVED)
+                    + memory.size(FeedMemory.WATCHED) > 0;
+            mode = hasTaste ? Mode.FOR_YOU : Mode.EXPLORE;
         }
 
         int dp(float value) {
@@ -594,11 +632,18 @@ public final class BespokeFeed {
         }
 
         View build() {
-            LinearLayout root = new LinearLayout(activity);
-            root.setOrientation(LinearLayout.VERTICAL);
+            // The list fills the page, and the header block floats over its top.
+            // The header slides away while scrolling down and comes back when scrolling up.
+            android.widget.FrameLayout root = new android.widget.FrameLayout(activity);
             root.setBackgroundColor(bg);
             if (!embedded) root.setFitsSystemWindows(true);
             root.setClickable(true); // Do not let touches fall through to a page below.
+
+            LinearLayout top = new LinearLayout(activity);
+            top.setOrientation(LinearLayout.VERTICAL);
+            top.setBackgroundColor(bg);
+            top.setClickable(true);
+            topBlock = top;
 
             // Header.
             LinearLayout header = new LinearLayout(activity);
@@ -624,7 +669,7 @@ public final class BespokeFeed {
             titles.addView(title);
             titles.addView(subtitle);
             header.addView(titles);
-            root.addView(header);
+            top.addView(header);
 
             // Search.
             EditText search = new EditText(activity);
@@ -642,7 +687,7 @@ public final class BespokeFeed {
             LinearLayout.LayoutParams searchParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             searchParams.setMargins(dp(12), dp(4), dp(12), dp(4));
-            root.addView(search, searchParams);
+            top.addView(search, searchParams);
             search.addTextChangedListener(new TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
                 @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
@@ -653,29 +698,24 @@ public final class BespokeFeed {
             });
 
             View[] scroll = new View[1];
-            modeRow = chipRow(root, scroll);
-            sortRow = chipRow(root, scroll);
+            modeRow = chipRow(top, scroll);
+            sortRow = chipRow(top, scroll);
             sortScroll = scroll[0];
-            areaRow = chipRow(root, scroll);
+            areaRow = chipRow(top, scroll);
             areaScroll = scroll[0];
-            categoryRow = chipRow(root, scroll);
+            categoryRow = chipRow(top, scroll);
             categoryScroll = scroll[0];
             categoryScroll.setVisibility(View.GONE);
-
-            status = text(14, fgSecondary, false);
-            status.setGravity(Gravity.CENTER);
-            status.setPadding(dp(24), dp(48), dp(24), dp(48));
-            status.setText("Loading the HackerTube catalog…");
-            root.addView(status, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            View spacer = new View(activity);
+            top.addView(spacer, new LinearLayout.LayoutParams(1, dp(4)));
 
             list = new ListView(activity);
             list.setDivider(null);
-            list.setVisibility(View.GONE);
+            list.setClipToPadding(false);
             empty = text(14, fgSecondary, false);
             empty.setGravity(Gravity.CENTER);
-            empty.setPadding(dp(24), dp(32), dp(24), dp(8));
-            empty.setVisibility(View.GONE);
+            empty.setPadding(dp(24), dp(48), dp(24), dp(48));
+            empty.setText("Loading the HackerTube catalog…");
             list.addHeaderView(empty, null, false);
             TextView footer = text(11, fgSecondary, false);
             footer.setText(ATTRIBUTION);
@@ -684,8 +724,21 @@ public final class BespokeFeed {
             list.addFooterView(footer, null, false);
             adapter = new FeedAdapter();
             list.setAdapter(adapter);
-            root.addView(list, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            root.addView(list, new android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            root.addView(top, new android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP));
+
+            // The list starts below the header block.
+            top.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+                int height = b - t;
+                if (list.getPaddingTop() != height) {
+                    list.setPadding(0, height, 0, list.getPaddingBottom());
+                    if (v.getTranslationY() < -height) v.setTranslationY(-height);
+                }
+            });
+            collapseHeaderOnScroll();
 
             if (embedded) keepAboveNavigationBar(root);
 
@@ -695,7 +748,7 @@ public final class BespokeFeed {
                     Utils.runOnMainThread(() -> onCatalog(c));
                 } catch (Exception ex) {
                     Logger.printException(() -> "Bespoke feed could not load the catalog", ex);
-                    Utils.runOnMainThread(() -> status.setText(
+                    Utils.runOnMainThread(() -> empty.setText(
                             "Could not load the catalog. Check your connection and open the feed again."));
                 }
             });
@@ -722,7 +775,7 @@ public final class BespokeFeed {
                     }
                     int covered = Math.max(0, bottom - availableBottom);
                     if (list.getPaddingBottom() != covered) {
-                        list.setPadding(0, 0, 0, covered);
+                        list.setPadding(0, list.getPaddingTop(), 0, covered);
                     }
                 } catch (Exception ex) {
                     Logger.printDebug(() -> "Bespoke feed layout update failed");
@@ -730,10 +783,58 @@ public final class BespokeFeed {
             });
         }
 
+        /** Moves the header block with the scroll, then snaps it fully in or out. */
+        void collapseHeaderOnScroll() {
+            list.setOnScrollListener(new AbsListView.OnScrollListener() {
+                int lastFirst = -1;
+                int lastTop;
+
+                @Override
+                public void onScrollStateChanged(AbsListView view, int state) {
+                    if (state != SCROLL_STATE_IDLE) return;
+                    int height = topBlock.getHeight();
+                    float y = topBlock.getTranslationY();
+                    boolean atTop = view.getFirstVisiblePosition() == 0;
+                    float target = (atTop || y > -height / 2f) ? 0 : -height;
+                    if (y != target) topBlock.animate().translationY(target).setDuration(150).start();
+                }
+
+                @Override
+                public void onScroll(AbsListView view, int first, int visible, int total) {
+                    View child = view.getChildAt(0);
+                    if (child == null) return;
+                    int childTop = child.getTop();
+                    int dy;
+                    if (lastFirst < 0) {
+                        dy = 0;
+                    } else if (first == lastFirst) {
+                        dy = lastTop - childTop;
+                    } else {
+                        dy = first > lastFirst ? dp(24) : -dp(24);
+                    }
+                    lastFirst = first;
+                    lastTop = childTop;
+                    if (dy == 0) return;
+
+                    int height = topBlock.getHeight();
+                    float y = topBlock.getTranslationY() - dy;
+                    if (first == 0 && childTop >= view.getPaddingTop() - dp(4)) y = 0;
+                    y = Math.max(-height, Math.min(0, y));
+                    topBlock.animate().cancel();
+                    topBlock.setTranslationY(y);
+                }
+            });
+        }
+
+        void showHeader() {
+            if (topBlock != null) {
+                topBlock.animate().cancel();
+                topBlock.setTranslationY(0);
+            }
+        }
+
         void onCatalog(Catalog c) {
             if (activity.isFinishing() || modeRow.getChildCount() > 0) return;
-            status.setVisibility(View.GONE);
-            list.setVisibility(View.VISIBLE);
             rebuildChips();
             applyFilter();
         }
@@ -761,6 +862,7 @@ public final class BespokeFeed {
             if (c == null) return;
 
             modeRow.removeAllViews();
+            chip(modeRow, "For you", mode == Mode.FOR_YOU, v -> setMode(Mode.FOR_YOU));
             chip(modeRow, "Explore", mode == Mode.EXPLORE, v -> setMode(Mode.EXPLORE));
             chip(modeRow, "♥ Liked " + memory.size(FeedMemory.LIKED), mode == Mode.LIKED, v -> setMode(Mode.LIKED));
             chip(modeRow, "★ Saved " + memory.size(FeedMemory.SAVED), mode == Mode.SAVED, v -> setMode(Mode.SAVED));
@@ -830,6 +932,7 @@ public final class BespokeFeed {
         }
 
         void setMode(Mode mode) {
+            if (mode == Mode.FOR_YOU) forYouVideos = null;
             this.mode = mode;
             refresh(true);
         }
@@ -853,13 +956,17 @@ public final class BespokeFeed {
         void refresh(boolean scrollToTop) {
             rebuildChips();
             applyFilter();
-            if (scrollToTop) list.setSelection(0);
+            if (scrollToTop) {
+                showHeader();
+                list.setSelection(0);
+            }
         }
 
         // endregion
 
         List<Video> source(Catalog c) {
             switch (mode) {
+                case FOR_YOU: return forYou(c);
                 case LIKED: return fromIds(c, memory.ids(FeedMemory.LIKED));
                 case SAVED: return fromIds(c, memory.ids(FeedMemory.SAVED));
                 case HISTORY: return fromIds(c, memory.ids(FeedMemory.WATCHED));
@@ -887,6 +994,34 @@ public final class BespokeFeed {
             }
         }
 
+        List<Video> forYou(Catalog c) {
+            // Computed when For you is opened, so liking a pick does not reshuffle the list.
+            if (forYouVideos != null) return forYouVideos;
+            java.util.Set<String> excluded = new java.util.HashSet<>();
+            excluded.addAll(memory.ids(FeedMemory.WATCHED));
+            excluded.addAll(memory.ids(FeedMemory.LIKED));
+            excluded.addAll(memory.ids(FeedMemory.SAVED));
+            excluded.addAll(memory.ids(FeedMemory.HIDDEN));
+            List<ForYou.Pick> picks = ForYou.rank(c.forYou, ForYou.signals(memory), excluded,
+                    new ForYou.Titles() {
+                        @Override public String title(int index) { return c.videos.get(index).title; }
+                        @Override public String area(int index) { return c.videos.get(index).area; }
+                        @Override public String areaName(String areaId) {
+                            String name = c.areaNames.get(areaId);
+                            return name == null ? "other topics" : name;
+                        }
+                    }, 150, forYouSeed);
+            List<Video> videos = new ArrayList<>();
+            forYouReasons.clear();
+            for (ForYou.Pick pick : picks) {
+                Video v = c.videos.get(pick.index);
+                videos.add(v);
+                forYouReasons.put(v.id, pick.reason);
+            }
+            forYouVideos = videos;
+            return videos;
+        }
+
         List<Video> fromIds(Catalog c, List<String> ids) {
             List<Video> videos = new ArrayList<>();
             for (String id : ids) {
@@ -904,6 +1039,7 @@ public final class BespokeFeed {
             for (Video v : source(c)) {
                 if (!query.isEmpty() && !v.searchText.contains(query)) continue;
                 if (!explore) {
+                    if (mode == Mode.FOR_YOU && memory.contains(FeedMemory.HIDDEN, v.id)) continue;
                     shown.add(v);
                     continue;
                 }
@@ -919,6 +1055,8 @@ public final class BespokeFeed {
             String emptyText = null;
             if (shown.isEmpty()) {
                 switch (mode) {
+                    case FOR_YOU: emptyText = "Like, save or watch a few videos from Explore,"
+                            + " and your picks will show up here."; break;
                     case LIKED: emptyText = "Nothing liked yet. Tap ♡ Like on a video."; break;
                     case SAVED: emptyText = "Nothing saved yet. Tap ☆ Save on a video to watch it later."; break;
                     case HISTORY: emptyText = "Videos you open from HackerTube show up here."; break;
@@ -975,7 +1113,7 @@ public final class BespokeFeed {
         final class Row {
             final LinearLayout view;
             final ImageView thumbnail;
-            final TextView title, meta, why, like, save, hide;
+            final TextView reason, title, meta, why, like, save, hide;
             Video video;
 
             Row() {
@@ -1004,6 +1142,11 @@ public final class BespokeFeed {
                 texts.setOrientation(LinearLayout.VERTICAL);
                 texts.setPadding(dp(12), dp(8), dp(12), 0);
 
+                reason = text(12, accent, true);
+                reason.setMaxLines(1);
+                reason.setEllipsize(TextUtils.TruncateAt.END);
+                reason.setPadding(0, 0, 0, dp(2));
+
                 title = text(16, fg, true);
                 title.setMaxLines(2);
                 title.setEllipsize(TextUtils.TruncateAt.END);
@@ -1015,6 +1158,7 @@ public final class BespokeFeed {
                 why.setEllipsize(TextUtils.TruncateAt.END);
                 why.setPadding(0, dp(4), 0, 0);
 
+                texts.addView(reason);
                 texts.addView(title);
                 texts.addView(meta);
                 texts.addView(why);
@@ -1064,6 +1208,9 @@ public final class BespokeFeed {
 
             void bind(Video v) {
                 video = v;
+                String pickReason = mode == Mode.FOR_YOU ? forYouReasons.get(v.id) : null;
+                reason.setText(pickReason);
+                reason.setVisibility(pickReason == null ? View.GONE : View.VISIBLE);
                 title.setText(v.title);
                 StringBuilder m = new StringBuilder();
                 if (!v.channel.isEmpty()) m.append(v.channel).append(" · ");
@@ -1084,7 +1231,8 @@ public final class BespokeFeed {
                 save.setTextColor(saved ? accent : fg);
                 boolean hidden = memory.contains(FeedMemory.HIDDEN, v.id);
                 hide.setText(hidden ? "Show again" : "Not interested");
-                hide.setVisibility(mode == Mode.EXPLORE || hidden ? View.VISIBLE : View.GONE);
+                hide.setVisibility(mode == Mode.EXPLORE || mode == Mode.FOR_YOU || hidden
+                        ? View.VISIBLE : View.GONE);
 
                 thumbnail.setAlpha(watched && mode == Mode.EXPLORE ? 0.55f : 1f);
                 loadThumbnail(thumbnail, v.id);

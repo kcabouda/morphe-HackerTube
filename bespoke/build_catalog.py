@@ -45,12 +45,13 @@ def main(src: str) -> None:
             "ty": r.get("content_type") or "",
             "lv": r.get("level") or "",
             "sr": r["hn"].get("strong_recs", 0),
+            "tg": [t.lower() for t in r.get("tags") or []][:6],
         })
 
     videos.sort(key=lambda x: -x["s"])
     catalog = {
         "format": "bespoke-catalog",
-        "version": 2,
+        "version": 3,
         "source": "HackerTube data export 2026-10-31 (hackertube.org/data), ODC-By 1.0",
         "areas": [{"id": k, "name": v} for k, v in sorted(areas.items(), key=lambda kv: kv[1])],
         "categories": sorted(categories.values(), key=lambda c: c["name"]),
