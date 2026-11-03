@@ -1,3 +1,9 @@
+## [2.6.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.5.0...v2.6.0) (2026-11-03)
+
+### ✨ New Features
+
+* **YouTube - Bespoke feed:** Add likes, saves, history, sub-topics and filters ([84097e0](https://github.com/kcabouda/morphe-HackerTube/commit/84097e02f0c9a3df3042dce38d7dace3934df75f))
+
 ## [2.5.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.4.1...v2.5.0) (2026-11-02)
 
 ### ✨ New Features
