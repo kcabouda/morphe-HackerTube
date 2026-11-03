@@ -1,3 +1,9 @@
+## [2.7.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.6.0...v2.7.0) (2026-11-03)
+
+### ✨ New Features
+
+* **YouTube - Bespoke feed:** Add For you, and a header that hides while scrolling ([8980196](https://github.com/kcabouda/morphe-HackerTube/commit/8980196c541b5dcd95ee4177ad0a6caaf72b27cf))
+
 ## [2.6.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.5.0...v2.6.0) (2026-11-03)
 
 ### ✨ New Features
