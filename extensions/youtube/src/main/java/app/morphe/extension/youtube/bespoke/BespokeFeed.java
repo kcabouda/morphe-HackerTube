@@ -573,6 +573,8 @@ public final class BespokeFeed {
 
         // Views.
         final List<Video> shown = new ArrayList<>();
+        /** Videos whose "why HN recommends it" text is shown in full. */
+        final java.util.Set<String> expandedWhy = new java.util.HashSet<>();
         LinearLayout modeRow, sortRow, areaRow, categoryRow;
         View sortScroll, areaScroll, categoryScroll;
         TextView empty;
@@ -1280,7 +1282,12 @@ public final class BespokeFeed {
                 };
                 thumbnail.setOnClickListener(openListener);
                 title.setOnClickListener(openListener);
-                why.setOnClickListener(openListener);
+                // Tapping the "why" text shows it in full, tapping again folds it.
+                why.setOnClickListener(v -> {
+                    if (video == null) return;
+                    if (!expandedWhy.remove(video.id)) expandedWhy.add(video.id);
+                    bindWhy(video);
+                });
                 meta.setOnClickListener(openListener);
                 like.setOnClickListener(v -> {
                     if (video != null) toggle(FeedMemory.LIKED, video);
@@ -1292,6 +1299,19 @@ public final class BespokeFeed {
                     if (video != null) toggle(FeedMemory.HIDDEN, video);
                 });
                 view.setTag(this);
+            }
+
+            void bindWhy(Video v) {
+                why.setVisibility(v.why.isEmpty() ? View.GONE : View.VISIBLE);
+                if (expandedWhy.contains(v.id)) {
+                    why.setMaxLines(Integer.MAX_VALUE);
+                    why.setEllipsize(null);
+                    why.setText(v.why + "  ▴ Less");
+                } else {
+                    why.setMaxLines(2);
+                    why.setEllipsize(TextUtils.TruncateAt.END);
+                    why.setText(v.why);
+                }
             }
 
             TextView action(LinearLayout parent) {
@@ -1322,8 +1342,7 @@ public final class BespokeFeed {
                 boolean watched = memory.contains(FeedMemory.WATCHED, v.id);
                 if (watched && mode != Mode.HISTORY) m.append(" · Watched");
                 meta.setText(m);
-                why.setText(v.why);
-                why.setVisibility(v.why.isEmpty() ? View.GONE : View.VISIBLE);
+                bindWhy(v);
 
                 boolean liked = memory.contains(FeedMemory.LIKED, v.id);
                 like.setText(liked ? "♥ Liked" : "♡ Like");
