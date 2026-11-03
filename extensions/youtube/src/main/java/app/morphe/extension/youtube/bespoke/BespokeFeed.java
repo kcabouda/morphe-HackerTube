@@ -668,7 +668,14 @@ public final class BespokeFeed {
             subtitle.setText("Videos Hacker News keeps recommending");
             titles.addView(title);
             titles.addView(subtitle);
-            header.addView(titles);
+            header.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView more = text(22, fg, true);
+            more.setText("⋮");
+            more.setPadding(dp(16), dp(4), dp(4), dp(4));
+            more.setContentDescription("Feed memory");
+            more.setOnClickListener(this::showMemoryMenu);
+            header.addView(more);
             top.addView(header);
 
             // Search.
@@ -782,6 +789,101 @@ public final class BespokeFeed {
                 }
             });
         }
+
+        // region Export, import, reset
+
+        void showMemoryMenu(View anchor) {
+            android.widget.PopupMenu menu = new android.widget.PopupMenu(activity, anchor);
+            menu.getMenu().add(0, 1, 0, "Export feed memory");
+            menu.getMenu().add(0, 2, 1, "Import feed memory");
+            menu.getMenu().add(0, 3, 2, "Reset feed memory");
+            menu.setOnMenuItemClickListener(item -> {
+                switch (item.getItemId()) {
+                    case 1: exportMemory(); break;
+                    case 2: importMemory(); break;
+                    case 3: resetMemory(); break;
+                    default:
+                }
+                return true;
+            });
+            menu.show();
+        }
+
+        void exportMemory() {
+            String date = new java.text.SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(new java.util.Date());
+            FilePicker.create(activity, "application/json", "bespoke-feed-" + date + ".json", uri -> {
+                try (java.io.OutputStream out = activity.getContentResolver().openOutputStream(uri, "wt")) {
+                    if (out == null) throw new IllegalStateException("No output stream");
+                    out.write(memory.toJson().getBytes(StandardCharsets.UTF_8));
+                    Utils.showToastShort("Feed memory exported");
+                } catch (Exception ex) {
+                    Logger.printException(() -> "Bespoke feed export failed", ex);
+                    Utils.showToastShort("Export failed");
+                }
+            });
+        }
+
+        void importMemory() {
+            FilePicker.open(activity, uri -> {
+                final String json;
+                try (InputStream in = activity.getContentResolver().openInputStream(uri)) {
+                    if (in == null) throw new IllegalStateException("No input stream");
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    byte[] buffer = new byte[16 * 1024];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                        if (out.size() > 20 * 1024 * 1024) throw new IllegalStateException("File too large");
+                    }
+                    json = out.toString("UTF-8");
+                    new JSONObject(json); // Validate before asking.
+                } catch (Exception ex) {
+                    Logger.printException(() -> "Bespoke feed import could not read the file", ex);
+                    Utils.showToastShort("This file can't be read");
+                    return;
+                }
+                new android.app.AlertDialog.Builder(activity)
+                        .setTitle("Import feed memory")
+                        .setMessage("Merge keeps what's on this phone and adds the file's likes, saves "
+                                + "and history. Replace swaps everything for the file's content.")
+                        .setPositiveButton("Merge", (d, w) -> doImport(json, false))
+                        .setNeutralButton("Replace", (d, w) -> doImport(json, true))
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .show();
+            });
+        }
+
+        void doImport(String json, boolean replace) {
+            try {
+                int count = memory.importJson(json, replace);
+                Utils.showToastShort("Imported " + count + " entries");
+                memoryChanged();
+            } catch (Exception ex) {
+                Logger.printException(() -> "Bespoke feed import failed", ex);
+                Utils.showToastShort("This is not a feed memory export");
+            }
+        }
+
+        void resetMemory() {
+            new android.app.AlertDialog.Builder(activity)
+                    .setTitle("Reset feed memory?")
+                    .setMessage("This deletes your likes, saves, history and not interested videos "
+                            + "on this phone. Export first if you want a backup.")
+                    .setPositiveButton("Reset", (d, w) -> {
+                        memory.reset();
+                        Utils.showToastShort("Feed memory reset");
+                        memoryChanged();
+                    })
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
+        }
+
+        void memoryChanged() {
+            forYouVideos = null;
+            refresh(true);
+        }
+
+        // endregion
 
         /** Moves the header block with the scroll, then snaps it fully in or out. */
         void collapseHeaderOnScroll() {

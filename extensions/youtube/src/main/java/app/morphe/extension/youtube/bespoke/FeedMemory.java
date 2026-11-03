@@ -108,6 +108,59 @@ final class FeedMemory {
         save();
     }
 
+    /** Empties every list. */
+    void reset() {
+        for (LinkedHashMap<String, Long> list : lists.values()) list.clear();
+        save();
+    }
+
+    /**
+     * Imports an exported file.
+     *
+     * @param replace true to replace the current memory, false to merge with it
+     *                (a video keeps the latest time it was added).
+     * @return number of entries in the file.
+     */
+    int importJson(String json, boolean replace) throws Exception {
+        JSONObject root = new JSONObject(json);
+        if (!"bespoke-feed".equals(root.optString("format"))) {
+            throw new IllegalArgumentException("Not a Bespoke feed export");
+        }
+        // Parse everything before changing anything.
+        Map<String, List<Map.Entry<String, Long>>> parsed = new LinkedHashMap<>();
+        int count = 0;
+        for (String name : LISTS) {
+            List<Map.Entry<String, Long>> entries = new ArrayList<>();
+            JSONObject list = root.optJSONObject(name);
+            if (list != null) {
+                for (Iterator<String> it = list.keys(); it.hasNext(); ) {
+                    String id = it.next();
+                    if (!id.matches("[A-Za-z0-9_-]{11}")) continue;
+                    entries.add(new AbstractMap.SimpleEntry<>(id, list.optLong(id)));
+                }
+            }
+            count += entries.size();
+            parsed.put(name, entries);
+        }
+        for (String name : LISTS) {
+            LinkedHashMap<String, Long> merged = new LinkedHashMap<>();
+            List<Map.Entry<String, Long>> all = new ArrayList<>();
+            if (!replace) all.addAll(lists.get(name).entrySet());
+            all.addAll(parsed.get(name));
+            Map<String, Long> latest = new LinkedHashMap<>();
+            for (Map.Entry<String, Long> e : all) {
+                Long current = latest.get(e.getKey());
+                if (current == null || e.getValue() > current) latest.put(e.getKey(), e.getValue());
+            }
+            List<Map.Entry<String, Long>> sorted = new ArrayList<>(latest.entrySet());
+            sorted.sort(Map.Entry.comparingByValue());
+            for (Map.Entry<String, Long> e : sorted) merged.put(e.getKey(), e.getValue());
+            lists.put(name, merged);
+        }
+        save();
+        return count;
+    }
+
     String toJson() throws Exception {
         JSONObject root = new JSONObject();
         root.put("format", "bespoke-feed");
