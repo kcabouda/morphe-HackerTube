@@ -1,3 +1,9 @@
+## [2.10.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.9.0...v2.10.0) (2026-11-03)
+
+### ✨ New Features
+
+* **YouTube - Bespoke feed:** Count how much of each video is watched ([70daccd](https://github.com/kcabouda/morphe-HackerTube/commit/70daccda6e44027ad72f457dda45cdc42a00455d))
+
 ## [2.9.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.8.0...v2.9.0) (2026-11-03)
 
 ### ✨ New Features
