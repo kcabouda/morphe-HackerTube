@@ -1,3 +1,9 @@
+## [2.9.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.8.0...v2.9.0) (2026-11-03)
+
+### ✨ New Features
+
+* **YouTube - Bespoke feed:** Tap the why HN recommends it text to read it in full ([7e16327](https://github.com/kcabouda/morphe-HackerTube/commit/7e1632778792f8551667b2dd81256b8f6a778438))
+
 ## [2.8.0](https://github.com/kcabouda/morphe-HackerTube/compare/v2.7.0...v2.8.0) (2026-11-03)
 
 ### ✨ New Features
