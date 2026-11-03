@@ -31,8 +31,10 @@ final class FeedMemory {
     static final String SAVED = "saved";
     static final String HIDDEN = "hidden";
     static final String WATCHED = "watched";
+    /** Furthest point reached in a video, in percent (not a time). */
+    static final String PROGRESS = "progress";
 
-    private static final String[] LISTS = {LIKED, SAVED, HIDDEN, WATCHED};
+    private static final String[] LISTS = {LIKED, SAVED, HIDDEN, WATCHED, PROGRESS};
     private static final String FILE_NAME = "bespoke_feed_memory.json";
 
     private static FeedMemory instance;
@@ -106,6 +108,34 @@ final class FeedMemory {
         entries.remove(videoId); // Move to the end (most recent).
         entries.put(videoId, System.currentTimeMillis());
         save();
+    }
+
+    /** @return furthest point reached in percent, or -1 if not known. */
+    int progress(String videoId) {
+        Long value = lists.get(PROGRESS).get(videoId);
+        return value == null ? -1 : value.intValue();
+    }
+
+    /**
+     * Records playback of a catalog video. Counts it as watched after 30 seconds or 20%,
+     * and saves the progress when it moved by at least 5%.
+     */
+    void recordPlayback(String videoId, int percent, long timeMillis) {
+        boolean changed = false;
+        LinkedHashMap<String, Long> watched = lists.get(WATCHED);
+        if ((timeMillis >= 30_000 || percent >= 20) && !watched.containsKey(videoId)) {
+            watched.put(videoId, System.currentTimeMillis());
+            changed = true;
+        }
+        LinkedHashMap<String, Long> progress = lists.get(PROGRESS);
+        Long old = progress.get(videoId);
+        if (old == null || percent >= old + 5 || (percent >= 95 && old < 95)) {
+            if (old == null || percent > old) {
+                progress.put(videoId, (long) percent);
+                changed = true;
+            }
+        }
+        if (changed) save();
     }
 
     /** Empties every list. */

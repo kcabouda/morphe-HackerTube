@@ -9,6 +9,8 @@ import app.morphe.patcher.patch.PatchException
 import app.morphe.patcher.util.getReference
 import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod.Companion.toMutable
 import app.morphe.patcher.util.registersUsed
+import app.morphe.patches.youtube.video.information.videoInformationPatch
+import app.morphe.patches.youtube.video.information.videoTimeHook
 import app.morphe.patches.youtube.video.series.BrowseFragmentFingerprint
 import app.morphe.patches.youtube.video.series.BrowseRouteFingerprint
 import app.morphe.util.indexOfFirstInstructionReversedOrThrow
@@ -55,6 +57,7 @@ val bespokeFeedPatch = bytecodePatch(
         sharedExtensionPatch,
         settingsPatch,
         navigationBarHookPatch,
+        videoInformationPatch,
     )
 
     compatibleWith(COMPATIBILITY_YOUTUBE)
@@ -68,6 +71,9 @@ val bespokeFeedPatch = bytecodePatch(
         )
 
         hookNavigationButtonCreated(EXTENSION_CLASS)
+
+        // How far catalog videos are watched, for the For you ranking.
+        videoTimeHook(EXTENSION_CLASS, "videoTimeChanged")
 
 
         // Show the feed inside YouTube's main screen, as a browse page, so the player and

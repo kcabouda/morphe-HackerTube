@@ -99,7 +99,17 @@ final class ForYou {
         List<Signal> signals = new ArrayList<>();
         add(signals, memory.ids(FeedMemory.LIKED), 3, "liked");
         add(signals, memory.ids(FeedMemory.SAVED), 2, "saved");
-        add(signals, memory.ids(FeedMemory.WATCHED), 1, "watched");
+        // Watched videos count by how much of them was watched:
+        // dropped early = a weak "not for me", most of it = a strong "more like this".
+        List<String> watched = memory.ids(FeedMemory.WATCHED);
+        int count = Math.min(100, watched.size());
+        for (int i = 0; i < count; i++) {
+            String id = watched.get(i);
+            int percent = memory.progress(id);
+            double weight = percent < 0 ? 0.5 : percent < 20 ? -0.5 : percent < 60 ? 0.7 : 1.5;
+            double decay = 1.0 / (1.0 + i / 50.0);
+            signals.add(new Signal(id, weight * decay, "watched"));
+        }
         add(signals, memory.ids(FeedMemory.HIDDEN), -3, null);
         return signals;
     }

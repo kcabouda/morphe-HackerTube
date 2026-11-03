@@ -60,6 +60,7 @@ import app.morphe.extension.shared.ResourceType;
 import app.morphe.extension.shared.ResourceUtils;
 import app.morphe.extension.shared.Utils;
 import app.morphe.extension.shared.theme.ThemeUtils;
+import app.morphe.extension.youtube.patches.VideoInformation;
 import app.morphe.extension.youtube.shared.NavigationBar;
 
 /**
@@ -119,6 +120,51 @@ public final class BespokeFeed {
         Intent intent = activity.getIntent();
         return intent != null && BESPOKE_FEED_INTENT.equals(intent.getDataString());
     }
+
+    // region Watch tracking
+
+    private static boolean catalogLoadStarted;
+
+    /**
+     * Injection point (video time, about once per second).
+     * Records how far catalog videos are watched, wherever they are played from.
+     */
+    public static void videoTimeChanged(long timeMillis) {
+        try {
+            Catalog c = catalog;
+            if (c == null) {
+                loadCatalogFromCacheInBackground();
+                return;
+            }
+            String videoId = VideoInformation.getVideoId();
+            if (videoId == null || videoId.isEmpty() || !c.byId.containsKey(videoId)) return;
+            long length = VideoInformation.getVideoLength();
+            if (length <= 0 || timeMillis <= 0) return;
+            int percent = (int) Math.min(100, timeMillis * 100 / length);
+            FeedMemory.get(Utils.getContext()).recordPlayback(videoId, percent, timeMillis);
+        } catch (Exception ex) {
+            Logger.printException(() -> "Bespoke feed videoTimeChanged failure", ex);
+        }
+    }
+
+    /** Loads the cached catalog once, so videos can be tracked before the feed is opened. */
+    private static void loadCatalogFromCacheInBackground() {
+        if (catalogLoadStarted) return;
+        catalogLoadStarted = true;
+        Utils.runOnBackgroundThread(() -> {
+            try {
+                Context context = Utils.getContext();
+                if (context == null) return;
+                // Only if the feed was used before: never download just for tracking.
+                if (!new File(context.getFilesDir(), "bespoke_catalog.json").exists()) return;
+                loadCatalog(context);
+            } catch (Exception ex) {
+                Logger.printInfo(() -> "Bespoke feed could not load the catalog for tracking", ex);
+            }
+        });
+    }
+
+    // endregion
 
     // region Navigation bar
 
@@ -1340,7 +1386,9 @@ public final class BespokeFeed {
                 if (!v.category.isEmpty()) m.append(" · ").append(v.category);
                 if (!v.type.isEmpty()) m.append(" · ").append(label(v.type));
                 boolean watched = memory.contains(FeedMemory.WATCHED, v.id);
-                if (watched && mode != Mode.HISTORY) m.append(" · Watched");
+                int percent = memory.progress(v.id);
+                if (percent >= 0) m.append(" · Watched ").append(percent).append('%');
+                else if (watched) m.append(" · Opened");
                 meta.setText(m);
                 bindWhy(v);
 
